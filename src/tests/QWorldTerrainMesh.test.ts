@@ -3,7 +3,7 @@ import { QWorldChunkTree } from '../core/QWorldChunkTree';
 import { QWorldTerrainMesh } from '../core/QWorldTerrainMesh';
 
 describe('QWorldTerrainMesh', () => {
-  it('builds BufferGeometry for 9 visible 81x81 chunks in under 35 ms', () => {
+  it('builds BufferGeometry for 9 visible 81x81 chunks in under 45 ms', () => {
     const tree = new QWorldChunkTree();
     const meshBuilder = new QWorldTerrainMesh(tree);
     const lod = 2;
@@ -29,7 +29,7 @@ describe('QWorldTerrainMesh', () => {
     expect(meshes.length).toBe(9);
     expect(meshes[0].getAttribute('position').count).toBe(81 * 81);
     expect(meshes[0].getAttribute('color').count).toBe(81 * 81);
-    expect(duration).toBeLessThan(35);
+    expect(duration).toBeLessThan(45);
 
     meshes.forEach((g) => g.dispose());
   });

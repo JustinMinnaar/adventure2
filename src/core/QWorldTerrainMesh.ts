@@ -113,11 +113,16 @@ export class QWorldTerrainMesh {
           colors[p3 + 1] = 1 - Math.abs(norm - 0.5) * 1.6;
           colors[p3 + 2] = 1 - norm;
         } else {
-          const rgb = BIOME_COLORS[b] ?? BIOME_COLORS[0];
+          // 5-tap cross blend smooths discrete biome borders against triangle sawtooth artifacts
+          const c0 = BIOME_COLORS[b] ?? BIOME_COLORS[0];
+          const cL = BIOME_COLORS[this.tempBiomes[lz * CHUNK_SIZE + xLeft]] ?? c0;
+          const cR = BIOME_COLORS[this.tempBiomes[lz * CHUNK_SIZE + xRight]] ?? c0;
+          const cU = BIOME_COLORS[this.tempBiomes[zUp * CHUNK_SIZE + lx]] ?? c0;
+          const cD = BIOME_COLORS[this.tempBiomes[zDown * CHUNK_SIZE + lx]] ?? c0;
           const shade = Math.max(0.65, Math.min(1.25, 0.9 + h * 0.0003));
-          colors[p3] = Math.min(1, rgb[0] * shade);
-          colors[p3 + 1] = Math.min(1, rgb[1] * shade);
-          colors[p3 + 2] = Math.min(1, rgb[2] * shade);
+          colors[p3] = Math.min(1, (c0[0] * 0.6 + (cL[0] + cR[0] + cU[0] + cD[0]) * 0.1) * shade);
+          colors[p3 + 1] = Math.min(1, (c0[1] * 0.6 + (cL[1] + cR[1] + cU[1] + cD[1]) * 0.1) * shade);
+          colors[p3 + 2] = Math.min(1, (c0[2] * 0.6 + (cL[2] + cR[2] + cU[2] + cD[2]) * 0.1) * shade);
         }
       }
     }

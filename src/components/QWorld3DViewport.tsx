@@ -490,8 +490,33 @@ if (uShowGrid > 0.5 && uGridSpacing > 0.0) {
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      const cam = camStateRef.current;
+      const oldDist = cam.distance;
       const factor = e.deltaY > 0 ? 1.14 : 0.88;
-      camStateRef.current.distance = Math.max(25, Math.min(2500000, camStateRef.current.distance * factor));
+      const newDist = Math.max(25, Math.min(2500000, oldDist * factor));
+      if (newDist === oldDist) return;
+
+      const hit = getHitPoint(e.clientX, e.clientY);
+      if (hit) {
+        const scale = newDist / oldDist;
+        cam.targetX = hit.x + (cam.targetX - hit.x) * scale;
+        cam.targetZ = hit.z + (cam.targetZ - hit.z) * scale;
+      }
+      cam.distance = newDist;
+
+      // Sync camera immediately so rapid wheel ticks within one frame stay locked to the cursor
+      const lod = computeLodFromDistance(cam.distance);
+      const targetY = chunkTree.getHeightAt(lod, cam.targetX, cam.targetZ) * 0.05;
+      const yawRad = (cam.yawDeg * Math.PI) / 180;
+      const pitchRad = (cam.pitchDeg * Math.PI) / 180;
+      const horiz = cam.distance * Math.cos(pitchRad);
+      camera.position.set(
+        cam.targetX + horiz * Math.sin(yawRad),
+        targetY + cam.distance * Math.sin(pitchRad),
+        cam.targetZ + horiz * Math.cos(yawRad)
+      );
+      camera.lookAt(cam.targetX, targetY, cam.targetZ);
+      camera.updateMatrixWorld();
     };
 
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
