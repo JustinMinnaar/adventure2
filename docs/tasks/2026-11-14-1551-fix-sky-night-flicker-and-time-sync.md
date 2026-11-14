@@ -1,7 +1,7 @@
 # TASK-20261114-1551: Fix Night Sky Flicker, Backwards Patch Jumps & Multi-Tab Time Sync
 
 - **Date / Time Reference**: 2026-11-14 15:51:54
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 - **Summary**: Eliminated night-time sky simulation stalls, flickering, and backwards-jumping galaxy star patches, fixed midnight (`00:00`) omen-scan performance bottlenecks across `QWorldCelestial` and `QWorldSkyPreview`, and isolated explicit multi-tab `'time-sync'` events from periodic `'map-state'` broadcasts so globe `+2h` / `-2h` / calendar time changes never snap back.
 - **Key Changes & Decisions**:
   1. **60 FPS Prerendered Mist Overlays & Stable Projection (`src/core/QWorldSkyMistTextures.ts` & `src/components/QWorldSkyPreview.tsx`)**:

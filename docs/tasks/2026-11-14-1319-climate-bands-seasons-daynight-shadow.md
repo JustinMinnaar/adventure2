@@ -1,7 +1,7 @@
 # TASK-20261114-1319: Climate Latitude Bands, Orbital Seasons & Planetary Day/Night Shadow
 
 - **Date / Time Reference**: `2026-11-14 13:19:45`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Reviewed and overhauled temperature, rainfall, and biome generation to establish realistic latitude climate bands (warm equatorial `|lat| <= 15°`, temperate `15°..55°`, cool/cold polar `> 55°` with significantly reduced green vegetation), linked planetary seasons to the solar calendar's orbital axial tilt (`23.4°`), added four Northern Hemisphere season quick-jump buttons + time-of-day controls in the toolbar, and added a real-time day/night shadow terminator on the 3D planet.

@@ -1,7 +1,7 @@
 # TASK-20261114-1343: Planetary Spin-Axis Pole Line & N/S Pole Labels
 
 - **Date / Time Reference**: `2026-11-14 13:43:50`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Added a 3D spin-axis pole line passing through the planet with `N` and `S` pole exit sprites, visible only when zoomed out to the whole-planet view.

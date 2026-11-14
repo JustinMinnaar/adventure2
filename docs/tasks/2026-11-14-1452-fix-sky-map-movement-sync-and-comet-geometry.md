@@ -1,7 +1,7 @@
 # TASK-20261114-1452: Fix Sky Map Movement Sync Feedback Loop & Comet Visibility Geometry
 
 - **Date / Time Reference**: 2026-11-14 14:52:00
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 - **Summary**: Investigated and resolved why the sky map was not moving correctly during playback or time navigation. Discovered that the diurnal/sidereal math across Year 1 and Year 3 is mathematically pure and identical, but two separate issues caused the problem: (1) an unthrottled BroadcastChannel ping-pong loop between the open 3D Map tab and Sky Preview tab that repeatedly snapped `worldHours` backwards to throttled background-tab timestamps, and (2) comet apparition shortcuts defaulted to hour 23:00 when the comet had already set and was 40° underground, aiming the camera downward into the dark ground polygon.
 - **Key Changes & Decisions**:
   1. **BroadcastChannel Synchronization Architecture (`src/components/QWorldSkyPreview.tsx` & `src/App.tsx`)**:

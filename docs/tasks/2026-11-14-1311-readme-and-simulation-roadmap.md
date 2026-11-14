@@ -1,7 +1,7 @@
 # TASK-20261114-1311: Root README Summary & Simulation/Game Readiness Review
 
 - **Date / Time Reference**: 2026-11-14 13:11:29
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Reviewed all current Adventure2 modules, recent commits, and uncommitted features; created a high-level root [`README.md`](file:///f:/Dev/adventure2/README.md) describing what the project does; and prepared a gap analysis proposing what is still needed to turn the editor into a playable simulation/game world.

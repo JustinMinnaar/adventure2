@@ -1,7 +1,7 @@
 # TASK-20261114-1407: Help Mode Panel, 1.5x Wider Sidebar, View Alignment & Reset View
 
 - **Date / Time Reference**: `2026-11-14 14:07:35`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Widened the right side-panel by 1.5x (480px default), added a dedicated `Help & Guide` (`❓`) mode as the last tool tab documenting sun position, day/night shadow, seasons, view alignment, and climate bands, and added `N/S Aligned`, `Sun-Aligned`, and `Reset View` buttons inside the `Select / Pan` mode panel.

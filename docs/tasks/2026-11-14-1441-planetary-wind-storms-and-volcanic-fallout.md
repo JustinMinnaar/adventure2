@@ -1,7 +1,7 @@
 # TASK-20261114-1441: Planetary Winds, Extreme Storm Risk & Mountain-Blocked Volcanic Fallout
 
 - **Date / Time Reference**: `2026-11-14 14:41:21`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Implemented a full-planet atmospheric circulation, hurricane/extreme storm risk, and mountain-blocked volcanic fallout simulation with independent map overlays across any view mode, fault-line volcano generation, dedicated Weather & Fallout sidebar controls, 3D world ash & charred foliage rendering, and Sky Preview volcanic haze & northern horizon glow.

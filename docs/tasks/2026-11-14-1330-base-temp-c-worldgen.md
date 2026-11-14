@@ -1,7 +1,7 @@
 # TASK-20261114-1330: Base Planet Temperature Slider (0°C Ice to 50°C Extreme)
 
 - **Date / Time Reference**: `2026-11-14 13:30:36`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Added a `Base Temp` (`0°C` ice to `50°C` extreme, default `10°C`) slider to the Generate World panel and wired it through temperature, rainfall, and foliage/biome generation as well as the `Temp`, `Rain`, and seasonal `Normal` terrain views.

@@ -1,7 +1,7 @@
 # TASK-20261114-1415: Smooth Sun-Aligned Rotation & Eliminated L0 Wrap Pause
 
 - **Date / Time Reference**: `2026-11-14 14:15:11`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Fixed both rotation issues in `Sun-Aligned` globe view: eliminated the sudden left/right tilt pivot when rotating past the subsolar meridian, and eliminated the periodic pause when crossing L0 chunk boundaries.

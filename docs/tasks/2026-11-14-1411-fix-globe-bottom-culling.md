@@ -1,7 +1,7 @@
 # TASK-20261114-1411: Fix Premature Bottom-of-Globe Frustum Culling
 
 - **Date / Time Reference**: `2026-11-14 14:11:32`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (5d1580e — 2026-11-14 16:08)`
 
 ## Summary
 Fixed premature CPU-side frustum culling of the southern hemisphere (`cz = 3`) in whole-planet globe view where the vertex shader warps flat-space chunks onto the sphere.
