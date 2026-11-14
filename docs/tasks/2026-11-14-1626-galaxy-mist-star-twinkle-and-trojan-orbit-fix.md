@@ -1,7 +1,7 @@
 # TASK-20261114-1626: Fainter Galaxy Mist & Stars, `1 s/s` Star Twinkling & `Tears of Vaelis` 3D Orbital Fix
 
 - **Date / Time Reference**: 2026-11-14 16:26:22
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Made the host galaxy mist (`The Astral River`) and drawn stars substantially fainter and more natural across Ground, Surround, and Zenith Dome views, added real-time atmospheric star twinkling at `1 s/s` (and subtle twinkle at `1 m/s`), and resolved `Tears of Vaelis` (`trojanCluster`) 3D orbital node collapse, correlated diagonal shear, and scratch vector aliasing while enhancing the top-down `Orbital Plane` panel.
 - **Key Changes & Decisions**:
   1. **`Tears of Vaelis` 3D Orbital Geometry & Vector Purity ([`QWorldCelestial.ts`](file:///f:/Dev/adventure2/src/core/QWorldCelestial.ts))**:

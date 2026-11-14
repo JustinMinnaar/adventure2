@@ -1,7 +1,7 @@
 # TASK-20261114-1952: Hover Aim Crosshair for Pointer Sphere Mode (`I` Key)
 
 - **Date / Time Reference**: 2026-11-14 19:52:23
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Added a compact aim crosshair on `pointerCanvasRef` when Pure View Pointer Sphere mode (`I` key, `pureMouseMode === 'sphere'`) is active and the mouse button is not held down, allowing users to aim accurately before holding down the mouse button to ignite the glowing sphere and starlight trail.
 - **Key Changes & Decisions**:
   1. **Hover State & Idle-Safe Overlay Loop ([`QWorldSkyPreview.tsx`](file:///f:/Dev/adventure2/src/components/QWorldSkyPreview.tsx))**:

@@ -1,7 +1,7 @@
 # TASK-20261114-1634: Fix Globe Polar Rotation Cut-Off & Far-Side Culling
 
 - **Date / Time Reference**: `2026-11-14 16:34:00`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 
 ## Summary
 Fixed the 3D globe rendering, hemisphere culling, L0 anti-meridian chunk wrapping, and ray-picking so rotating/panning toward the North or South Pole preserves a continuous closed sphere without slicing off the polar cap.

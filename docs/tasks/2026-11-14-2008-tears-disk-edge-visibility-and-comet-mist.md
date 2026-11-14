@@ -1,7 +1,7 @@
 # TASK-20261114-2008: Remove Tears Glow Disk, Fix Extended Sky Object Edge Visibility, and Soften & Double Comet Width
 
 - **Date / Time Reference**: `2026-11-14 20:08:37`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 
 ## Summary
 Removed the artificial circular background glow behind the Tears of Vaelis (`L4` Trojan shards), fixed sudden viewport/horizon edge pop-in/out for extended sky objects (sun dawn/dusk horizon glow, volcanic horizon glow, constellation drawings/stick lines, and the comet tail), replaced the hard-edged comet polygon/needle with a soft fading Gaussian mist plume (`cometTailMist`), and adjusted the periodic comet apparition closer so it spreads across double its previous width (`8×` moon width arc = `~4.48°`).

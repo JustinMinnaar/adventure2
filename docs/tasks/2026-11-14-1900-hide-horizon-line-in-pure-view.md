@@ -1,7 +1,7 @@
 # TASK-20261114-1900: Hide Horizon Dividing Line When Toggling UI Off (`O` Key)
 
 - **Date / Time Reference**: 2026-11-14 19:00:59
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Updated `QWorldSkyPreview` so that hiding the UI in Pure View via the `O` key also suppresses the grey horizon dividing line across both Ground View and Surround View, leaving only the dark filled ground silhouette against the night sky, and allowed pressing `O` from the standard multi-panel layout as well as fullscreen mode.
 - **Key Changes & Decisions**:
   1. **Hide Horizon Line in Pure View ([`QWorldSkyPreview.tsx`](file:///f:/Dev/adventure2/src/components/QWorldSkyPreview.tsx#L4345-L4353), [`QWorldSkyPreview.tsx`](file:///f:/Dev/adventure2/src/components/QWorldSkyPreview.tsx#L4762-L4768))**:

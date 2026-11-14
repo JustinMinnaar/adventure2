@@ -1,7 +1,7 @@
 # TASK-20261114-2055: Add Volcano Eruption Glow Toggle (`V` Key & Toolbar Button, Default Off)
 
 - **Date / Time Reference**: `2026-11-14 20:55:40`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 
 ## Summary
 Added a toggle (`showVolcanoGlow`, defaulting to `false`) controlled by the **`V`** key and a `🌋` toolbar icon-button so distant volcanic eruption horizon glow, ash veil haze, and the HUD `🌋 Horizon Glow` badge stay hidden unless explicitly enabled when simulating an active eruption.

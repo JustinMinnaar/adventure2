@@ -1,7 +1,7 @@
 # TASK-20261114-1945: Remove Artificial Moon Glow & Lock Coloured Nebula On
 
 - **Date / Time Reference**: 2026-11-14 19:45:57
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Removed the artificial radial halo glow rendered around `Vaelis` and `Morvath` in `drawPhaseMoonDisc`, and removed Key `'5'` along with all UI toggles for hiding The Chrysalis Nebula so it remains permanently visible like the host galaxy cloud.
 - **Key Changes & Decisions**:
   1. **Remove Artificial Moon Radial Glow ([`QWorldSkyPreview.tsx`](file:///f:/Dev/adventure2/src/components/QWorldSkyPreview.tsx))**:

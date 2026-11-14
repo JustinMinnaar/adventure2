@@ -1,7 +1,7 @@
 # TASK-20261114-1922: Fullscreen Icon-Buttons, Fixed Galaxy Cloud & Pure View Moon Rim Suppression
 
 - **Date / Time Reference**: 2026-11-14 19:22:05
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Fixed The Astral River galaxy cloud as permanently visible (removing Key `4`, its header button, and its Orbits drawer checkbox), unified all sky projection (`1`/`2`/`3`), overlay (`5`–`9`, `0`), and tool/action (`Y`, `O`, Orbits, Perf, Calendar, `?`, Browser Fullscreen) controls into compact icon-buttons with instructional hotkey tooltips across both the header and fullscreen views, and suppressed moon disc outline borders (`rimColor`) in Pure View (`O`).
 - **Key Changes & Decisions**:
   1. **Always-Visible Galaxy Cloud (Remove Key `4` Toggle)** ([`QWorldSkyPreview.tsx`](file:///f:/Dev/adventure2/src/components/QWorldSkyPreview.tsx)):

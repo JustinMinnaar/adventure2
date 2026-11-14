@@ -1,7 +1,7 @@
 # TASK-20261114-2119: Continuous Comet Visibility Across Daytime, Sunset, Dawn & Night
 
 - **Date / Time Reference**: `2026-11-14 21:19:54`
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 
 ## Summary
 Implemented continuous comet sky visibility across daytime, dawn/sunset twilight, and full night so The Red Harbinger remains faintly visible when above the horizon during daylight, brightens smoothly as sunset finishes, and dims smoothly as the sun rises.

@@ -1,7 +1,7 @@
 # TASK-20261114-1931: Single-Pixel Pinpoint Stars & Steep Luminance Grading
 
 - **Date / Time Reference**: 2026-11-14 19:31:32
-- **Status**: `Pending Commit`
+- **Status**: `Committed (10c851e — 2026-11-14 21:33)`
 - **Summary**: Changed all fixed and constellation stars across Ground View, Surround Panorama, and Zenith Star Dome from scaled circles (`arc`) and bright cross-flared anchor discs to strict `1×1` pixel pinpoints, using a steep magnitude-to-luminance curve (`computeStarPinpointLuminance`) so only the brightest stars shine brightly while dimmer and catalog stars fade gracefully into the night sky.
 - **Key Changes & Decisions**:
   1. **Pinpoint Luminance Curve & Fixed 1px Twinkle ([`QWorldCelestial.ts`](file:///f:/Dev/adventure2/src/core/QWorldCelestial.ts))**:
