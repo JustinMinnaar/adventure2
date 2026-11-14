@@ -8,6 +8,13 @@ import {
   WORLD_SPAN_Z,
   PLANET_RADIUS_YARDS,
 } from '../core/QWorldChunkTree';
+import {
+  computeGlobeBlend,
+  intersectGlobeEllipsoid,
+  isGlobePointVisible,
+  projectWorldToGlobe,
+  wrapDeltaX,
+} from '../core/QWorldGlobeMath';
 import { QWorldTerrainMesh, TerrainRenderMode, ELEVATION_SCALE, computeFoliagePropAppearance, getSeaLevelOffsetForTemp } from '../core/QWorldTerrainMesh';
 import { QWorldVectorTree, WorldPoint2D, RouteStop } from '../core/QWorldVectorTree';
 import { buildMergedRouteNetwork, MergedRouteStrand } from '../core/QWorldRouteNetwork';
@@ -110,12 +117,6 @@ function computeSubGridBlend(distance: number, lod: number): number {
   return t * t * (3 - 2 * t);
 }
 
-function wrapDeltaX(dx: number): number {
-  if (dx > WORLD_SPAN_X * 0.5) return dx - WORLD_SPAN_X;
-  if (dx < -WORLD_SPAN_X * 0.5) return dx + WORLD_SPAN_X;
-  return dx;
-}
-
 function projectWorldToRendered(
   wx: number,
   wy: number,
@@ -125,21 +126,8 @@ function projectWorldToRendered(
   globeBlend: number,
   out: THREE.Vector3
 ): THREE.Vector3 {
-  if (globeBlend <= 0.001) {
-    return out.set(wx, wy, wz);
-  }
-  const clampedLon = Math.max(-Math.PI, Math.min(Math.PI, (wx - targetX) / PLANET_RADIUS_YARDS));
-  const clampedLat = Math.max(-Math.PI, Math.min(Math.PI, (wz - targetZ) / PLANET_RADIUS_YARDS));
-  const r = PLANET_RADIUS_YARDS + wy;
-  const cosLat = Math.cos(clampedLat);
-  const sX = targetX + r * cosLat * Math.sin(clampedLon);
-  const sZ = targetZ + r * Math.sin(clampedLat);
-  const sY = 0.65 * r * cosLat * Math.cos(clampedLon) - PLANET_RADIUS_YARDS;
-  return out.set(
-    wx + (sX - wx) * globeBlend,
-    wy + (sY - wy) * globeBlend,
-    wz + (sZ - wz) * globeBlend
-  );
+  projectWorldToGlobe(wx, wy, wz, targetX, targetZ, globeBlend, out);
+  return out;
 }
 
 function buildTipAnchoredPinGeometry(radius: number, height: number, colorHex: string): THREE.BufferGeometry {
@@ -573,6 +561,7 @@ export const QWorld3DViewport: React.FC<QWorld3DViewportProps> = ({
       const tex = new THREE.CanvasTexture(canvas);
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true });
       const sprite = new THREE.Sprite(mat);
+      sprite.frustumCulled = false;
       sprite.visible = false;
       scene.add(sprite);
       return { sprite, tex, mat };
@@ -592,7 +581,7 @@ export const QWorld3DViewport: React.FC<QWorld3DViewportProps> = ({
     };
 
     const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    terrainMat.customProgramCacheKey = () => 'terrain-grid-lambert-v14';
+    terrainMat.customProgramCacheKey = () => 'terrain-grid-lambert-v15';
     terrainMat.onBeforeCompile = (shader) => {
       shader.uniforms.uGridSpacing = gridUniforms.uGridSpacing;
       shader.uniforms.uSubGridBlend = gridUniforms.uSubGridBlend;
@@ -610,6 +599,7 @@ export const QWorld3DViewport: React.FC<QWorld3DViewportProps> = ({
 varying vec2 vGridLocal;
 varying vec2 vChunkOrigin;
 varying vec3 vGeoNormal;
+varying float vGlobeFacing;
 uniform vec2 uCamTarget;
 uniform vec2 uWorldSpan;
 uniform float uGlobeRadius;
@@ -624,14 +614,27 @@ vec3 flatWorldPos = (modelMatrix * vec4( transformed, 1.0 )).xyz;
 float geoLat = (0.5 - flatWorldPos.z / uWorldSpan.y) * 3.14159265;
 float geoLon = (flatWorldPos.x / uWorldSpan.x - 0.5) * 6.28318530;
 vec3 computedGeoNormal = vec3(cos(geoLat) * sin(geoLon), sin(geoLat), cos(geoLat) * cos(geoLon));
+float globeFacing = 1.0;
 if (uGlobeBlend > 0.001 && uGlobeRadius > 0.0) {
-  float lon = clamp((flatWorldPos.x - uCamTarget.x) / uGlobeRadius, -3.14159265, 3.14159265);
-  float lat = clamp((flatWorldPos.z - uCamTarget.y) / uGlobeRadius, -3.14159265, 3.14159265);
+  float lon = (flatWorldPos.x - uCamTarget.x) / uGlobeRadius;
+  float lat = clamp((flatWorldPos.z - uWorldSpan.y * 0.5) / uGlobeRadius, -1.57079633, 1.57079633);
+  float targetLat = clamp((uCamTarget.y - uWorldSpan.y * 0.5) / uGlobeRadius, -1.57079633, 1.57079633);
   float r = uGlobeRadius + flatWorldPos.y;
   float cosLat = cos(lat);
-  float sphereX = uCamTarget.x + r * cosLat * sin(lon);
-  float sphereZ = uCamTarget.y + r * sin(lat);
-  float sphereY = 0.65 * r * cosLat * cos(lon) - uGlobeRadius;
+  float sinLat = sin(lat);
+  float cosLon = cos(lon);
+  float sinLon = sin(lon);
+  float cosT = cos(targetLat);
+  float sinT = sin(targetLat);
+  float px = r * cosLat * sinLon;
+  float py = r * cosLat * cosLon;
+  float pz = r * sinLat;
+  float rotZ = pz * cosT - py * sinT;
+  float rotY = py * cosT + pz * sinT;
+  float sphereX = uCamTarget.x + px;
+  float sphereZ = uCamTarget.y + rotZ;
+  float sphereY = 0.65 * rotY - uGlobeRadius;
+  globeFacing = cosLat * cosLon * cosT + sinLat * sinT;
   transformed.x = mix(transformed.x, sphereX - modelMatrix[3][0], uGlobeBlend);
   transformed.z = mix(transformed.z, sphereZ - modelMatrix[3][2], uGlobeBlend);
   transformed.y = mix(transformed.y, sphereY, uGlobeBlend);
@@ -642,7 +645,8 @@ if (uGlobeBlend > 0.001 && uGlobeRadius > 0.0) {
           `#include <worldpos_vertex>
 vGridLocal = localXZ;
 vChunkOrigin = chunkOriginXZ;
-vGeoNormal = computedGeoNormal;`
+vGeoNormal = computedGeoNormal;
+vGlobeFacing = globeFacing;`
         );
 
       shader.fragmentShader = shader.fragmentShader
@@ -652,6 +656,7 @@ vGeoNormal = computedGeoNormal;`
 varying vec2 vGridLocal;
 varying vec2 vChunkOrigin;
 varying vec3 vGeoNormal;
+varying float vGlobeFacing;
 uniform float uGridSpacing;
 uniform float uSubGridBlend;
 uniform float uShowGrid;
@@ -696,7 +701,10 @@ if (uShowGrid > 0.5) {
 float sunDot = dot(normalize(vGeoNormal), normalize(uSunDir));
 float dayFactor = smoothstep(-0.10, 0.14, sunDot);
 vec3 nightTint = diffuseColor.rgb * vec3(0.18, 0.22, 0.34);
-diffuseColor.rgb = mix(nightTint, diffuseColor.rgb, dayFactor);`
+diffuseColor.rgb = mix(nightTint, diffuseColor.rgb, dayFactor);
+if (uGlobeBlend > 0.25 && vGlobeFacing < -0.03) {
+  discard;
+}`
         );
     };
 
@@ -706,6 +714,7 @@ diffuseColor.rgb = mix(nightTint, diffuseColor.rgb, dayFactor);`
         shader.uniforms.uCamTarget = gridUniforms.uCamTarget;
         shader.uniforms.uGlobeRadius = gridUniforms.uGlobeRadius;
         shader.uniforms.uGlobeBlend = gridUniforms.uGlobeBlend;
+        shader.uniforms.uWorldSpan = gridUniforms.uWorldSpan;
 
         shader.vertexShader = shader.vertexShader
           .replace(
@@ -713,6 +722,7 @@ diffuseColor.rgb = mix(nightTint, diffuseColor.rgb, dayFactor);`
             `#include <common>
 varying float vIsBack;
 uniform vec2 uCamTarget;
+uniform vec2 uWorldSpan;
 uniform float uGlobeRadius;
 uniform float uGlobeBlend;`
           )
@@ -722,14 +732,26 @@ uniform float uGlobeBlend;`
 vec3 flatWorldPos = (modelMatrix * vec4( transformed, 1.0 )).xyz;
 float isBackVertex = 0.0;
 if (uGlobeBlend > 0.001 && uGlobeRadius > 0.0) {
-  float lon = clamp((flatWorldPos.x - uCamTarget.x) / uGlobeRadius, -3.14159265, 3.14159265);
-  float lat = clamp((flatWorldPos.z - uCamTarget.y) / uGlobeRadius, -3.14159265, 3.14159265);
+  float rawLon = (flatWorldPos.x - uCamTarget.x) / uGlobeRadius;
+  float lat = clamp((flatWorldPos.z - uWorldSpan.y * 0.5) / uGlobeRadius, -1.57079633, 1.57079633);
+  float targetLat = clamp((uCamTarget.y - uWorldSpan.y * 0.5) / uGlobeRadius, -1.57079633, 1.57079633);
   float r = uGlobeRadius + flatWorldPos.y;
   float cosLat = cos(lat);
-  float sphereX = uCamTarget.x + r * cosLat * sin(lon);
-  float sphereZ = uCamTarget.y + r * sin(lat);
-  float sphereY = 0.65 * r * cosLat * cos(lon) - uGlobeRadius;
-  if (cosLat * cos(lon) < -0.02) {
+  float sinLat = sin(lat);
+  float cosLon = cos(rawLon);
+  float sinLon = sin(rawLon);
+  float cosT = cos(targetLat);
+  float sinT = sin(targetLat);
+  float px = r * cosLat * sinLon;
+  float py = r * cosLat * cosLon;
+  float pz = r * sinLat;
+  float rotZ = pz * cosT - py * sinT;
+  float rotY = py * cosT + pz * sinT;
+  float sphereX = uCamTarget.x + px;
+  float sphereZ = uCamTarget.y + rotZ;
+  float sphereY = 0.65 * rotY - uGlobeRadius;
+  float frontCos = cosLat * cosLon * cosT + sinLat * sinT;
+  if (abs(rawLon) > 3.18 || frontCos < -0.02) {
     isBackVertex = 1.0;
   }
   transformed.x = mix(transformed.x, sphereX - modelMatrix[3][0], uGlobeBlend);
@@ -758,13 +780,13 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
 
     // Shared globe-warped material for 3D marker pins (tip anchored directly on terrain surface)
     const pinMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-    applyGlobeWarp(pinMat, 'marker-pin-globe-v2');
+    applyGlobeWarp(pinMat, 'marker-pin-globe-v3');
 
     // Shared globe-warped materials for tectonic fault lines (red = mountain uplift, blue = depression/canyon/rift)
     const redFaultLineMat = new THREE.LineBasicMaterial({ color: 0xef4444 });
-    applyGlobeWarp(redFaultLineMat, 'fault-line-red-globe-v1');
+    applyGlobeWarp(redFaultLineMat, 'fault-line-red-globe-v2');
     const blueFaultLineMat = new THREE.LineBasicMaterial({ color: 0x3b82f6 });
-    applyGlobeWarp(blueFaultLineMat, 'fault-line-blue-globe-v1');
+    applyGlobeWarp(blueFaultLineMat, 'fault-line-blue-globe-v2');
 
     // Brush preview ring (crisp 1px LineLoop)
     const ringPts: THREE.Vector3[] = [];
@@ -792,20 +814,20 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
 
     // Shared globe-warped materials for routes & polylines (prevents shader recompilation on vector rebuilds)
     const riverLineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
-    applyGlobeWarp(riverLineMat, 'poly-line-river-globe-v1');
+    applyGlobeWarp(riverLineMat, 'poly-line-river-globe-v2');
     const roadLineMat = new THREE.LineBasicMaterial({ color: 0xd97706 });
-    applyGlobeWarp(roadLineMat, 'poly-line-road-globe-v1');
+    applyGlobeWarp(roadLineMat, 'poly-line-road-globe-v2');
     const routeRibbonMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    applyGlobeWarp(routeRibbonMat, 'route-ribbon-globe-v1');
+    applyGlobeWarp(routeRibbonMat, 'route-ribbon-globe-v2');
     const weatherSolidMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    applyGlobeWarp(weatherSolidMat, 'weather-solid-globe-v1');
+    applyGlobeWarp(weatherSolidMat, 'weather-solid-globe-v2');
     const weatherAlphaMat = new THREE.MeshBasicMaterial({
       vertexColors: true,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    applyGlobeWarp(weatherAlphaMat, 'weather-alpha-globe-v1');
+    applyGlobeWarp(weatherAlphaMat, 'weather-alpha-globe-v2');
 
     const sharedMaterials = new Set<THREE.Material>([
       terrainMat,
@@ -825,6 +847,15 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
     let activeRequestSeq = 0;
     let activeRequestDone = true;
     let activeSpan = chunkTree.getChunkWorldSpan(computeLodFromDistance(camStateRef.current.distance));
+    let lastTerrainLod = -1;
+
+    const wrapL0ChunkPositions = (targetX: number, span: number) => {
+      for (const mesh of chunkMeshMap.values()) {
+        const wrappedCx = mesh.userData.wrappedCx as number;
+        const relCenter = wrapDeltaX((wrappedCx + 0.5) * span - targetX);
+        mesh.position.x = targetX + relCenter - 0.5 * span;
+      }
+    };
 
     const disposeStaleMeshes = () => {
       while (staleMeshes.length > 0) {
@@ -838,6 +869,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
       if (pendingUploads.length > 0) {
         const startTime = performance.now();
         let uploaded = 0;
+        const targetX = camStateRef.current.targetX;
         while (pendingUploads.length > 0 && (uploaded < 1 || (uploaded < 4 && performance.now() - startTime < 4.0))) {
           const msg = pendingUploads.shift()!;
           if (msg.requestSeq !== activeRequestSeq) continue;
@@ -859,7 +891,11 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
           mesh.frustumCulled = false;
           mesh.userData.wrappedCx = msg.wrappedCx;
           mesh.userData.cz = msg.cz;
-          mesh.position.set(msg.cx * activeSpan, 0, msg.cz * activeSpan);
+          const posX =
+            lastTerrainLod === 0
+              ? targetX + wrapDeltaX((msg.wrappedCx + 0.5) * activeSpan - targetX) - 0.5 * activeSpan
+              : msg.cx * activeSpan;
+          mesh.position.set(posX, 0, msg.cz * activeSpan);
           terrainGroup.add(mesh);
           chunkMeshMap.set(key, mesh);
           uploaded++;
@@ -924,7 +960,6 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
 
     let lastVectorBuildDist = camStateRef.current.distance;
     let lastVectorLod = -1;
-    let lastTerrainLod = -1;
     let lastTerrainMode: TerrainRenderMode | null = null;
     let lastTerrainFlat: boolean | null = null;
     let lastTerrainTemp: number | null = null;
@@ -1026,7 +1061,11 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
       for (const [key, item] of needed.entries()) {
         const existing = chunkMeshMap.get(key);
         if (existing) {
-          existing.position.set(item.cx * span, 0, item.cz * span);
+          const posX =
+            lod === 0
+              ? cam.targetX + wrapDeltaX((item.wrappedCx + 0.5) * span - cam.targetX) - 0.5 * span
+              : item.cx * span;
+          existing.position.set(posX, 0, item.cz * span);
           continue;
         }
         missingItems.push({ cx: item.cx, cz: item.cz, wrappedCx: item.wrappedCx, distSq: item.distSq });
@@ -1246,6 +1285,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         for (const offsetX of [-WORLD_SPAN_X, 0, WORLD_SPAN_X]) {
           const line = new THREE.Line(geo, mat);
           line.position.x = offsetX;
+          line.frustumCulled = false;
           vectorGroup.add(line);
         }
       }
@@ -1356,6 +1396,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
           const mesh = new THREE.Mesh(ribbonGeo, routeRibbonMat);
           mesh.userData.wrapMidX = midX;
           mesh.position.x = shiftX;
+          mesh.frustumCulled = false;
           vectorGroup.add(mesh);
         }
       }
@@ -1408,6 +1449,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         const renderX = cam.targetX + wrapDeltaX(m.x - cam.targetX);
         const surfaceY = chunkTree.getSurfaceHeightAt(lod, m.x, m.z, flatWater, curSeaLevel) * ELEVATION_SCALE;
         pin.userData.wrapPinX = m.x;
+        pin.frustumCulled = false;
         pin.position.set(renderX, surfaceY, m.z);
         vectorGroup.add(pin);
       }
@@ -1420,6 +1462,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         const renderX = cam.targetX + wrapDeltaX(tp.x - cam.targetX);
         const surfaceY = chunkTree.getSurfaceHeightAt(lod, tp.x, tp.z, flatWater, curSeaLevel) * ELEVATION_SCALE;
         pin.userData.wrapPinX = tp.x;
+        pin.frustumCulled = false;
         pin.position.set(renderX, surfaceY, tp.z);
         vectorGroup.add(pin);
       }
@@ -1437,6 +1480,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
           const surfaceY =
             chunkTree.getSurfaceHeightAt(lod, st.x, st.z, flatWater, curSeaLevel) * ELEVATION_SCALE;
           pin.userData.wrapPinX = st.x;
+          pin.frustumCulled = false;
           pin.position.set(renderX, surfaceY, st.z);
           vectorGroup.add(pin);
         }
@@ -1469,6 +1513,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
             const guideMesh = new THREE.Mesh(guideRibbon, routeRibbonMat);
             guideMesh.userData.wrapMidX = midX;
             guideMesh.position.x = shiftX;
+            guideMesh.frustumCulled = false;
             vectorGroup.add(guideMesh);
           }
         }
@@ -1565,6 +1610,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
     const rayV = new THREE.Vector3();
     const rayTmp = new THREE.Vector3();
     const rayCand = new THREE.Vector3();
+    const globeSeedCoords = { wx: 0, wz: 0 };
 
     const getHitPoint = (clientX: number, clientY: number): THREE.Vector3 | null => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1598,10 +1644,28 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
       rayU.crossVectors(rayTmp, dir).normalize();
       rayV.crossVectors(dir, rayU).normalize();
 
-      const maxHalfSpan = PLANET_RADIUS_YARDS * Math.PI * 0.495;
+      const maxHalfSpan = PLANET_RADIUS_YARDS * Math.PI;
       let wx = cam.targetX;
       let wz = cam.targetZ;
       let wy = 0;
+
+      if (
+        globeBlend > 0.5 &&
+        intersectGlobeEllipsoid(
+          origin.x,
+          origin.y,
+          origin.z,
+          dir.x,
+          dir.y,
+          dir.z,
+          cam.targetX,
+          cam.targetZ,
+          globeSeedCoords
+        )
+      ) {
+        wx = globeSeedCoords.wx;
+        wz = globeSeedCoords.wz;
+      }
 
       const evalRayError = (x: number, y: number, z: number): [number, number] => {
         projectWorldToRendered(x, y, z, cam.targetX, cam.targetZ, globeBlend, rayCand);
@@ -1683,9 +1747,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         if (lod < m.minLod || lod > m.maxLod) continue;
         const dx = wrapDeltaX(m.x - cam.targetX);
         const dz = m.z - cam.targetZ;
-        const dLon = dx / PLANET_RADIUS_YARDS;
-        const dLat = dz / PLANET_RADIUS_YARDS;
-        if (globeBlend > 0.5 && (Math.abs(dLon) > Math.PI * 0.5 || Math.abs(dLat) > Math.PI * 0.5)) {
+        if (!isGlobePointVisible(cam.targetX + dx, m.z, cam.targetX, cam.targetZ, globeBlend)) {
           continue;
         }
 
@@ -1966,9 +2028,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
           const radius = propsRef.current.brushRadiusCells * chunkTree.getSampleSpacing(lod);
           const gb = gridUniforms.uGlobeBlend.value;
           const cam = camStateRef.current;
-          const dLon = (hit.x - cam.targetX) / PLANET_RADIUS_YARDS;
-          const dLat = (hit.z - cam.targetZ) / PLANET_RADIUS_YARDS;
-          if (gb > 0.5 && (Math.abs(dLon) > Math.PI * 0.5 || Math.abs(dLat) > Math.PI * 0.5)) {
+          if (!isGlobePointVisible(hit.x, hit.z, cam.targetX, cam.targetZ, gb)) {
             brushRing.visible = false;
           } else {
             brushRing.visible = true;
@@ -2067,16 +2127,22 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
       }
 
       const lod = computeLodFromDistance(cam.distance);
+      const globeBlend = computeGlobeBlend(cam.distance);
+      gridUniforms.uCamTarget.value.set(cam.targetX, cam.targetZ);
+      gridUniforms.uGlobeBlend.value = globeBlend;
       const targetY = chunkTree.getHeightAt(lod, cam.targetX, cam.targetZ) * ELEVATION_SCALE;
+      const lookAtY = targetY - PLANET_RADIUS_YARDS * globeBlend;
+      const orbitDist = cam.distance + PLANET_RADIUS_YARDS * globeBlend;
+      const effectivePitchDeg = cam.pitchDeg + (88 - cam.pitchDeg) * globeBlend;
       const yawRad = (cam.yawDeg * Math.PI) / 180;
-      const pitchRad = (cam.pitchDeg * Math.PI) / 180;
-      const horiz = cam.distance * Math.cos(pitchRad);
-      camera.position.set(
-        cam.targetX + horiz * Math.sin(yawRad),
-        targetY + cam.distance * Math.sin(pitchRad),
-        cam.targetZ + horiz * Math.cos(yawRad)
-      );
-      camera.lookAt(cam.targetX, targetY, cam.targetZ);
+      const pitchRad = (effectivePitchDeg * Math.PI) / 180;
+      const horiz = orbitDist * Math.cos(pitchRad);
+      const camX = cam.targetX + horiz * Math.sin(yawRad);
+      const camZ = cam.targetZ + horiz * Math.cos(yawRad);
+      const groundAtCam = chunkTree.getHeightAt(lod, camX, camZ) * ELEVATION_SCALE;
+      const camY = Math.max(groundAtCam + 1.5, lookAtY + orbitDist * Math.sin(pitchRad));
+      camera.position.set(camX, camY, camZ);
+      camera.lookAt(cam.targetX, lookAtY, cam.targetZ);
       camera.updateMatrixWorld();
     };
 
@@ -2178,9 +2244,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         if (lod < m.minLod || lod > m.maxLod) continue;
         const dx = wrapDeltaX(m.x - cam.targetX);
         const dz = m.z - cam.targetZ;
-        const dLon = dx / PLANET_RADIUS_YARDS;
-        const dLat = dz / PLANET_RADIUS_YARDS;
-        if (globeBlend > 0.5 && (Math.abs(dLon) > Math.PI * 0.5 || Math.abs(dLat) > Math.PI * 0.5)) continue;
+        if (!isGlobePointVisible(cam.targetX + dx, m.z, cam.targetX, cam.targetZ, globeBlend)) continue;
 
         const surfaceY = chunkTree.getSurfaceHeightAt(lod, m.x, m.z, flatWater, curSeaLevel) * ELEVATION_SCALE;
         const pinHeadOffset = pinScale * (propsRef.current.selectedMarkerId === m.id ? 1.8 : 1.4);
@@ -2252,9 +2316,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
           if (st.markerId) continue;
           const dx = wrapDeltaX(st.x - cam.targetX);
           const dz = st.z - cam.targetZ;
-          const dLon = dx / PLANET_RADIUS_YARDS;
-          const dLat = dz / PLANET_RADIUS_YARDS;
-          if (globeBlend > 0.5 && (Math.abs(dLon) > Math.PI * 0.5 || Math.abs(dLat) > Math.PI * 0.5)) continue;
+          if (!isGlobePointVisible(cam.targetX + dx, st.z, cam.targetX, cam.targetZ, globeBlend)) continue;
           const surfaceY = chunkTree.getSurfaceHeightAt(lod, st.x, st.z, flatWater, curSeaLevel) * ELEVATION_SCALE;
           const my = surfaceY + pinScale * 1.55;
           projectWorldToRendered(cam.targetX + dx, my, cam.targetZ + dz, cam.targetX, cam.targetZ, globeBlend, projVec);
@@ -2380,8 +2442,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
       const lod = computeLodFromDistance(cam.distance);
       gridUniforms.uCamTarget.value.set(cam.targetX, cam.targetZ);
       gridUniforms.uSubGridBlend.value = computeSubGridBlend(cam.distance, lod);
-      const globeT = Math.max(0, Math.min(1, (cam.distance - 20000) / (1800000 - 20000)));
-      const globeBlend = globeT * globeT * (3 - 2 * globeT);
+      const globeBlend = computeGlobeBlend(cam.distance);
       gridUniforms.uGlobeBlend.value = globeBlend;
       gridUniforms.uSunDir.value.copy(sunDirRef.current);
 
@@ -2486,11 +2547,7 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         lastChunkCenterKey = centerKey;
         if (lod === 0 && chunkMeshMap.size === WORLD_L0_CHUNKS_X * WORLD_L0_CHUNKS_Z) {
           // All L0 globe chunks are already loaded; reposition wrapped X in-place without stalling
-          for (const mesh of chunkMeshMap.values()) {
-            const wrappedCx = mesh.userData.wrappedCx as number;
-            const relCenter = wrapDeltaX((wrappedCx + 0.5) * span - cam.targetX);
-            mesh.position.x = cam.targetX + relCenter - 0.5 * span;
-          }
+          wrapL0ChunkPositions(cam.targetX, span);
         } else {
           rebuildTerrain();
         }
@@ -2499,10 +2556,15 @@ if (uGlobeBlend > 0.25 && vIsBack > 0.5) {
         } else {
           updateVectorWrapPositions();
         }
-      } else if (Math.abs(cam.distance - lastVectorBuildDist) > lastVectorBuildDist * 0.12) {
-        rebuildVectors();
       } else {
-        updateVectorWrapPositions();
+        if (lod === 0) {
+          wrapL0ChunkPositions(cam.targetX, span);
+        }
+        if (Math.abs(cam.distance - lastVectorBuildDist) > lastVectorBuildDist * 0.12) {
+          rebuildVectors();
+        } else {
+          updateVectorWrapPositions();
+        }
       }
 
       flushPendingTerrainUploads();

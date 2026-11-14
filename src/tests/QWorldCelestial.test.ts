@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CELESTIAL_CONFIG,
   computeCelestialSnapshot,
+  computeCometSkyVisibility,
+  computeStarPinpointLuminance,
+  computeStarTwinkleFactor,
   findAdjacentEclipse,
   projectUpcomingEclipses,
   scanUpcomingOmens,
@@ -209,7 +212,7 @@ describe('QWorldCelestial', () => {
     expect(COLOURED_NEBULA.outerColor).toBe('#8b5cf6');
   });
 
-  it('calculates the 12-year periodic comet appearing in Year 3 and Year 15 with 4x moon width tail', () => {
+  it('calculates the 12-year periodic comet appearing in Year 3 and Year 15 with 8x moon width tail', () => {
     const hoursPerDay = DEFAULT_CELESTIAL_CONFIG.hoursPerDay;
     const daysPerYear = DEFAULT_CELESTIAL_CONFIG.daysPerYear;
 
@@ -232,10 +235,11 @@ describe('QWorldCelestial', () => {
     expect(snapY3.year).toBe(3);
     expect(snapY3.comet.active).toBe(true);
     expect(snapY3.comet.activityFraction).toBeGreaterThan(0.95);
-    // Tail width must be strictly 4 times the width arc of the moon
+    // Tail width is double the previous 4x spread: 8 times the width arc of the moon (~4.48°)
     const moonWidthArc = DEFAULT_CELESTIAL_CONFIG.primaryMoon.angularRadiusDeg * 2; // 0.56°
-    expect(snapY3.comet.tailWidthDeg).toBeCloseTo(moonWidthArc * 4, 2); // 2.24°
-    expect(snapY3.comet.tailLengthDeg).toBeGreaterThan(20);
+    expect(snapY3.comet.tailWidthDeg).toBeCloseTo(moonWidthArc * 8, 2); // 4.48°
+    expect(snapY3.comet.tailLengthDeg).toBeGreaterThan(30);
+    expect(snapY3.comet.distanceAU).toBeLessThan(0.36);
 
     // Active omen trigger when above horizon at night
     if (snapY3.sun.sky.altitudeDeg < -2 && snapY3.comet.sky.altitudeDeg > 0) {
@@ -257,7 +261,7 @@ describe('QWorldCelestial', () => {
     expect(snapY15.year).toBe(15);
     expect(snapY15.comet.active).toBe(true);
     expect(snapY15.comet.activityFraction).toBeGreaterThan(0.95);
-    expect(snapY15.comet.tailWidthDeg).toBeCloseTo(moonWidthArc * 4, 2);
+    expect(snapY15.comet.tailWidthDeg).toBeCloseTo(moonWidthArc * 8, 2);
   });
 
   it('supports calendar year jumping and year stepping while preserving day of year and hour', () => {
@@ -434,5 +438,163 @@ describe('QWorldCelestial', () => {
     expect(nebMid).toBeGreaterThan(nebOuter);
     expect(nebOuter).toBeGreaterThan(0);
     expect(nebEdge).toBe(0);
+  });
+
+  it('tracks Tears of Vaelis shards across the sky at the same rate as Vaelis and preserves 3D thickness at orbital nodes', () => {
+    const cfg = DEFAULT_CELESTIAL_CONFIG;
+    const lat = 0;
+    const lon = 0;
+
+    // 1. Check diurnal separation consistency over 24 hours on Day 83 (including 19:40 -> 22:02)
+    const day83Base = 82 * cfg.hoursPerDay;
+    for (let h = 0; h <= 22; h += 2) {
+      const snap = computeCelestialSnapshot(day83Base + h, lat, lon, cfg, true);
+      const pm = snap.primaryMoon.sky;
+      const tc = snap.trojanCluster.coreSky;
+      const dot = Math.max(-1, Math.min(1, pm.east * tc.east + pm.north * tc.north + pm.up * tc.up));
+      const sepDeg = (Math.acos(dot) * 180) / Math.PI;
+      expect(sepDeg).toBeCloseTo(cfg.trojanCluster.lagCenterDeg, 1);
+
+      // Vector centroid of shards must closely align with trojanCluster core direction (< 3.5 deg)
+      let sumE = 0;
+      let sumN = 0;
+      let sumU = 0;
+      for (const sh of snap.trojanCluster.shards) {
+        sumE += sh.sky.east;
+        sumN += sh.sky.north;
+        sumU += sh.sky.up;
+      }
+      const centroidLen = Math.hypot(sumE, sumN, sumU);
+      const centroidDot = (sumE * tc.east + sumN * tc.north + sumU * tc.up) / centroidLen;
+      const centroidOffsetDeg = (Math.acos(Math.max(-1, Math.min(1, centroidDot))) * 180) / Math.PI;
+      expect(centroidOffsetDeg).toBeLessThan(3.5);
+    }
+
+    // 2. Find a timestamp in the first lunar cycle when Tears of Vaelis crosses the ascending node (~18 deg)
+    let nodeHours = 0;
+    let minNodeDistDeg = 999;
+    const targetNodeLonRad = (cfg.trojanCluster.lagCenterDeg * Math.PI) / 180;
+    for (let d = 0; d < 31; d += 0.25) {
+      const h = d * cfg.hoursPerDay;
+      const s = computeCelestialSnapshot(h, lat, lon, cfg, false);
+      const pmNodeRad = (cfg.primaryMoon.ascendingNodeDeg * Math.PI) / 180;
+      const diff = Math.atan2(
+        Math.sin(s.primaryMoon.orbitalAngleRad + targetNodeLonRad - pmNodeRad),
+        Math.cos(s.primaryMoon.orbitalAngleRad + targetNodeLonRad - pmNodeRad)
+      );
+      const deg = Math.abs((diff * 180) / Math.PI);
+      if (deg < minNodeDistDeg) {
+        minNodeDistDeg = deg;
+        nodeHours = h;
+      }
+    }
+    expect(minNodeDistDeg).toBeLessThan(3.0);
+
+    // Measure perpendicular angular thickness relative to the Vaelis-Tears orbital great-circle normal
+    const measurePerpThicknessDeg = (hours: number) => {
+      const snap = computeCelestialSnapshot(hours, lat, lon, cfg, true);
+      const pm = snap.primaryMoon.sky;
+      const tc = snap.trojanCluster.coreSky;
+      const nx = pm.north * tc.up - pm.up * tc.north;
+      const ny = pm.up * tc.east - pm.east * tc.up;
+      const nz = pm.east * tc.north - pm.north * tc.east;
+      const nLen = Math.hypot(nx, ny, nz);
+      let minPerp = Infinity;
+      let maxPerp = -Infinity;
+      for (const sh of snap.trojanCluster.shards) {
+        const perpSin = (sh.sky.east * nx + sh.sky.north * ny + sh.sky.up * nz) / nLen;
+        const perpDeg = (Math.asin(Math.max(-1, Math.min(1, perpSin))) * 180) / Math.PI;
+        if (perpDeg < minPerp) minPerp = perpDeg;
+        if (perpDeg > maxPerp) maxPerp = perpDeg;
+      }
+      return { spanDeg: maxPerp - minPerp, minPerp, maxPerp };
+    };
+
+    const atNode = measurePerpThicknessDeg(nodeHours);
+    const atAntinode = measurePerpThicknessDeg(nodeHours + 7 * cfg.hoursPerDay);
+    expect(atNode.spanDeg).toBeGreaterThan(3.5);
+    expect(atAntinode.spanDeg).toBeGreaterThan(3.5);
+    expect(atNode.minPerp).toBeLessThan(-1.2);
+    expect(atNode.maxPerp).toBeGreaterThan(1.2);
+  });
+
+  it('computes realistic atmospheric star twinkling at 1 s/s and identity at fast timelapse speeds', () => {
+    const off = computeStarTwinkleFactor(1.2, 0.4, 15, 3.7, 0);
+    expect(off.alphaMul).toBe(1);
+    expect(off.radiusMul).toBe(1);
+
+    const lowAltSamples: number[] = [];
+    const zenithSamples: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t = i * 0.13;
+      const low = computeStarTwinkleFactor(1.2, 0.4, 6, t, 1);
+      const high = computeStarTwinkleFactor(1.2, 0.4, 80, t, 1);
+      expect(low.alphaMul).toBeGreaterThanOrEqual(0.35);
+      expect(low.alphaMul).toBeLessThanOrEqual(1.3);
+      expect(high.alphaMul).toBeGreaterThanOrEqual(0.35);
+      expect(high.alphaMul).toBeLessThanOrEqual(1.3);
+      lowAltSamples.push(low.alphaMul);
+      zenithSamples.push(high.alphaMul);
+    }
+
+    const lowRange = Math.max(...lowAltSamples) - Math.min(...lowAltSamples);
+    const highRange = Math.max(...zenithSamples) - Math.min(...zenithSamples);
+    expect(lowRange).toBeGreaterThan(0.18);
+    expect(lowRange).toBeGreaterThan(highRange);
+  });
+
+  it('maps star magnitudes to pinpoint luminance with only the brightest stars bright and others dimmer to faint', () => {
+    const brightest = computeStarPinpointLuminance(0.05);
+    const brightAnchor = computeStarPinpointLuminance(0.20);
+    const medium = computeStarPinpointLuminance(0.30);
+    const dimmer = computeStarPinpointLuminance(0.40);
+    const faint = computeStarPinpointLuminance(0.65);
+
+    expect(brightest).toBeGreaterThan(0.85);
+    expect(brightest).toBeLessThanOrEqual(1.0);
+
+    expect(medium).toBeLessThan(0.40);
+    expect(medium).toBeGreaterThan(0.15);
+
+    expect(faint).toBeLessThan(0.12);
+    expect(faint).toBeGreaterThanOrEqual(0.05);
+
+    expect(brightest).toBeGreaterThan(brightAnchor);
+    expect(brightAnchor).toBeGreaterThan(dimmer);
+    expect(dimmer).toBeGreaterThan(faint);
+
+    for (let i = 0; i < 12; i++) {
+      const sample = computeStarTwinkleFactor(0.9, 0.3, 12, i * 0.17, 1);
+      expect(sample.radiusMul).toBe(1);
+    }
+  });
+
+  it('computes continuous comet sky visibility across daytime, dawn/sunset twilight, and night', () => {
+    const midDay = computeCometSkyVisibility(45);
+    const afternoon = computeCometSkyVisibility(15);
+    const horizonSunset = computeCometSkyVisibility(0);
+    const civilTwilight = computeCometSkyVisibility(-6);
+    const fullNight = computeCometSkyVisibility(-14);
+
+    expect(midDay).toBeGreaterThan(0.10);
+    expect(midDay).toBeLessThan(0.25);
+    expect(afternoon).toBeGreaterThan(0.10);
+    expect(afternoon).toBeLessThan(0.25);
+
+    expect(horizonSunset).toBeGreaterThan(0.35);
+    expect(horizonSunset).toBeLessThan(0.50);
+    expect(civilTwilight).toBeGreaterThan(0.70);
+    expect(fullNight).toBe(1.0);
+
+    // Brightens monotonically as sunset progresses and dims monotonically as the sun rises
+    const sunsetSeq = [30, 6, 0, -3, -6, -12].map((alt) => computeCometSkyVisibility(alt));
+    for (let i = 1; i < sunsetSeq.length; i++) {
+      expect(sunsetSeq[i]).toBeGreaterThan(sunsetSeq[i - 1]);
+    }
+
+    const sunriseSeq = [-12, -6, -3, 0, 6, 30].map((alt) => computeCometSkyVisibility(alt));
+    for (let i = 1; i < sunriseSeq.length; i++) {
+      expect(sunriseSeq[i]).toBeLessThan(sunriseSeq[i - 1]);
+    }
   });
 });

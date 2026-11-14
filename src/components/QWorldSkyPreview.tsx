@@ -7,11 +7,14 @@ import {
   UpcomingOmenEvent,
   getOmenLore,
   computeCelestialSnapshot,
+  computeCometSkyVisibility,
   computeDailySkyArc,
   scanUpcomingOmens,
   findAdjacentEclipse,
   EclipseProjection,
   starRaDecToHorizontal,
+  computeStarPinpointLuminance,
+  computeStarTwinkleFactor,
   formatClockHour,
   azimuthToCompass,
   SkyVectorHorizontal,
@@ -75,27 +78,12 @@ function drawPhaseMoonDisc(
   options: {
     litColor: string;
     darkColor: string;
-    glowColor?: string;
-    glowAlpha?: number;
     rimColor?: string;
     mottle?: boolean;
   }
 ) {
   ctx.save();
   ctx.translate(cx, cy);
-
-  if (options.glowColor && (options.glowAlpha ?? 0) > 0.005) {
-    const haloRad = radiusPx * 3.4;
-    const grad = ctx.createRadialGradient(0, 0, radiusPx * 0.7, 0, 0, haloRad);
-    grad.addColorStop(0, options.glowColor);
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.globalAlpha = options.glowAlpha ?? 0.25;
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(0, 0, haloRad, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
 
   ctx.fillStyle = options.darkColor;
   ctx.beginPath();
@@ -210,14 +198,15 @@ export const QWorldSkyPreview: React.FC = () => {
   const [showMythicArt, setShowMythicArt] = useState<boolean>(true);
   const [showBodyNames, setShowBodyNames] = useState<boolean>(true);
   const [showGlareWashout, setShowGlareWashout] = useState<boolean>(true);
+  const [showVolcanoGlow, setShowVolcanoGlow] = useState<boolean>(false);
   const [arcsAlpha, setArcsAlpha] = useState<number>(1);
   const [constellationsAlpha, setConstellationsAlpha] = useState<number>(1);
   const [mythicArtAlpha, setMythicArtAlpha] = useState<number>(1);
   const [bodyNamesAlpha, setBodyNamesAlpha] = useState<number>(1);
-  const [showGalaxyCloud, setShowGalaxyCloud] = useState<boolean>(true);
-  const [showNebula, setShowNebula] = useState<boolean>(true);
-  const [galaxyAlpha, setGalaxyAlpha] = useState<number>(1);
-  const [nebulaAlpha, setNebulaAlpha] = useState<number>(1);
+  const showGalaxyCloud = true;
+  const galaxyAlpha = 1;
+  const showNebula = true;
+  const nebulaAlpha = 1;
   const [showConfigDrawer, setShowConfigDrawer] = useState<boolean>(false);
   const [showPerfHud, setShowPerfHud] = useState<boolean>(false);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
@@ -270,11 +259,21 @@ export const QWorldSkyPreview: React.FC = () => {
   const stars = useMemo(() => buildConsistentStarCatalog(480), []);
   const dragLookRef = useRef<{ startX: number; startY: number; startAz: number; startPitch: number } | null>(null);
   const [viewportTick, setViewportTick] = useState(0);
+  const [twinkleTick, setTwinkleTick] = useState(0);
 
   const projectionModeRef = useRef<SkyProjectionMode>(projectionMode);
   projectionModeRef.current = projectionMode;
+  const pureMouseModeRef = useRef<PureMouseMode>(pureMouseMode);
+  pureMouseModeRef.current = pureMouseMode;
+  const isPureViewRef = useRef<boolean>(false);
+  isPureViewRef.current = focusedView !== 'none' && hideFocusHud;
 
-  const pointerStateRef = useRef<{ isDown: boolean; x: number; y: number }>({ isDown: false, x: 0, y: 0 });
+  const pointerStateRef = useRef<{ isDown: boolean; isHovering: boolean; x: number; y: number }>({
+    isDown: false,
+    isHovering: false,
+    x: 0,
+    y: 0,
+  });
   const pointerTrailRef = useRef<{ x: number; y: number; time: number }[]>([]);
   const pointerRafRef = useRef<number>(0);
   const TRAIL_DURATION_MS = 2500;
@@ -316,14 +315,15 @@ export const QWorldSkyPreview: React.FC = () => {
       trail.shift();
     }
 
-    const { isDown, x, y } = pointerStateRef.current;
+    const { isDown, isHovering, x, y } = pointerStateRef.current;
+    const showHoverCrosshair = isPureViewRef.current && pureMouseModeRef.current === 'sphere' && !isDown && isHovering;
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.scale(dpr, dpr);
 
-    if (trail.length === 0 && !isDown) {
+    if (trail.length === 0 && !isDown && !showHoverCrosshair) {
       ctx.restore();
       pointerRafRef.current = 0;
       return;
@@ -433,10 +433,31 @@ export const QWorldSkyPreview: React.FC = () => {
       ctx.stroke();
 
       ctx.restore();
+    } else if (showHoverCrosshair) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.78)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, y - 2.5);
+      ctx.lineTo(x, y - 7.5);
+      ctx.moveTo(x, y + 2.5);
+      ctx.lineTo(x, y + 7.5);
+      ctx.moveTo(x - 2.5, y);
+      ctx.lineTo(x - 7.5, y);
+      ctx.moveTo(x + 2.5, y);
+      ctx.lineTo(x + 7.5, y);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
+      ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+      ctx.restore();
     }
 
     ctx.restore();
-    pointerRafRef.current = requestAnimationFrame(renderPointerLayer);
+    if (trail.length > 0 || isDown) {
+      pointerRafRef.current = requestAnimationFrame(renderPointerLayer);
+    } else {
+      pointerRafRef.current = 0;
+    }
   };
 
   const schedulePointerTick = () => {
@@ -445,8 +466,15 @@ export const QWorldSkyPreview: React.FC = () => {
   };
 
   const startPointer = (x: number, y: number) => {
-    pointerStateRef.current = { isDown: true, x, y };
+    pointerStateRef.current = { isDown: true, isHovering: true, x, y };
     pointerTrailRef.current.push({ x, y, time: performance.now() });
+    schedulePointerTick();
+  };
+
+  const hoverPointer = (x: number, y: number) => {
+    pointerStateRef.current.x = x;
+    pointerStateRef.current.y = y;
+    pointerStateRef.current.isHovering = true;
     schedulePointerTick();
   };
 
@@ -470,6 +498,7 @@ export const QWorldSkyPreview: React.FC = () => {
   useEffect(() => {
     if (!hideFocusHud) {
       pointerStateRef.current.isDown = false;
+      pointerStateRef.current.isHovering = false;
       pointerTrailRef.current = [];
       if (pointerRafRef.current) {
         cancelAnimationFrame(pointerRafRef.current);
@@ -490,6 +519,7 @@ export const QWorldSkyPreview: React.FC = () => {
     if (pureMouseMode !== 'pan') {
       dragLookRef.current = null;
     }
+    schedulePointerTick();
   }, [pureMouseMode]);
 
   useEffect(() => {
@@ -518,21 +548,17 @@ export const QWorldSkyPreview: React.FC = () => {
     return () => canvas.removeEventListener('wheel', onWheel);
   }, [projectionMode, focusedView]);
 
-  // Smooth fade in/out for Overlays (Constellations, Mythic Art, Arcs, Body Names, Galaxy Cloud, Nebula)
+  // Smooth fade in/out for Overlays (Constellations, Mythic Art, Arcs, Body Names)
   useEffect(() => {
     const targetC = showConstellations ? 1 : 0;
     const targetM = showMythicArt ? 1 : 0;
     const targetA = showArcs ? 1 : 0;
     const targetN = showBodyNames ? 1 : 0;
-    const targetG = showGalaxyCloud ? 1 : 0;
-    const targetNeb = showNebula ? 1 : 0;
     if (
       Math.abs(constellationsAlpha - targetC) < 0.001 &&
       Math.abs(mythicArtAlpha - targetM) < 0.001 &&
       Math.abs(arcsAlpha - targetA) < 0.001 &&
-      Math.abs(bodyNamesAlpha - targetN) < 0.001 &&
-      Math.abs(galaxyAlpha - targetG) < 0.001 &&
-      Math.abs(nebulaAlpha - targetNeb) < 0.001
+      Math.abs(bodyNamesAlpha - targetN) < 0.001
     ) {
       return;
     }
@@ -554,8 +580,6 @@ export const QWorldSkyPreview: React.FC = () => {
       setMythicArtAlpha((m) => stepToward(m, targetM, step));
       setArcsAlpha((a) => stepToward(a, targetA, step));
       setBodyNamesAlpha((n) => stepToward(n, targetN, step));
-      setGalaxyAlpha((g) => stepToward(g, targetG, step));
-      setNebulaAlpha((neb) => stepToward(neb, targetNeb, step));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -565,14 +589,10 @@ export const QWorldSkyPreview: React.FC = () => {
     showMythicArt,
     showArcs,
     showBodyNames,
-    showGalaxyCloud,
-    showNebula,
     constellationsAlpha,
     mythicArtAlpha,
     arcsAlpha,
     bodyNamesAlpha,
-    galaxyAlpha,
-    nebulaAlpha,
   ]);
 
   const latestSimRef = useRef({ worldHours, latitudeDeg, longitudeDeg, config });
@@ -705,7 +725,7 @@ export const QWorldSkyPreview: React.FC = () => {
       } else if (e.key === 'o' || e.key === 'O' || e.code === 'KeyO') {
         if (focusedView !== 'none') {
           setHideFocusHud((v) => !v);
-        } else if (isBrowserFullscreen) {
+        } else {
           setFocusedView('preview');
           setHideFocusHud(true);
         }
@@ -723,16 +743,18 @@ export const QWorldSkyPreview: React.FC = () => {
         });
       } else if (e.key === '0') {
         setShowGlareWashout((v) => !v);
+      } else if (e.key === 'v' || e.key === 'V' || e.code === 'KeyV') {
+        setShowVolcanoGlow((v) => {
+          const next = !v;
+          triggerModeToast(next ? '🌋 Volcanic Eruption Glow: ON' : '🌋 Volcanic Eruption Glow: OFF');
+          return next;
+        });
       } else if (e.key === '1') {
         setProjectionMode('ground');
       } else if (e.key === '2') {
         setProjectionMode('surround');
       } else if (e.key === '3') {
         setFocusedView((cur) => (cur === 'none' ? 'preview' : cur === 'preview' ? 'dome' : cur === 'dome' ? 'orbit' : 'none'));
-      } else if (e.key === '4') {
-        setShowGalaxyCloud((v) => !v);
-      } else if (e.key === '5') {
-        setShowNebula((v) => !v);
       } else if (e.key === '6') {
         setShowBodyNames((v) => !v);
       } else if (e.key === '7') {
@@ -787,7 +809,7 @@ export const QWorldSkyPreview: React.FC = () => {
       document.removeEventListener('fullscreenchange', onFsChange);
       window.removeEventListener('resize', onResize);
     };
-  }, [focusedView, hideFocusHud, isBrowserFullscreen, selectedOmenModal, showHelpModal, showQuickSelect]);
+  }, [focusedView, hideFocusHud, selectedOmenModal, showHelpModal, showQuickSelect]);
 
   // Persistent BroadcastChannel & storage listener for map center, pin, volcanic ash & time sync
   useEffect(() => {
@@ -943,6 +965,20 @@ export const QWorldSkyPreview: React.FC = () => {
     return () => cancelAnimationFrame(raf);
   }, [playing, speedHoursPerSec, eclipseAutoAction]);
 
+  const twinkleStrength =
+    speedHoursPerSec <= 1 / 1800 ? 1 : speedHoursPerSec <= 1 / 60 ? 0.45 : 0;
+
+  // Ambient twinkling loop at 1 s/s (and subtly at 1 m/s) even before pressing Play
+  useEffect(() => {
+    if (twinkleStrength <= 0 || playing) return;
+    const id = window.setInterval(() => {
+      if (!document.hidden) {
+        setTwinkleTick((t) => (t + 1) % 100000);
+      }
+    }, 45);
+    return () => window.clearInterval(id);
+  }, [twinkleStrength, playing]);
+
   const snapshot: CelestialSnapshot = useMemo(() => {
     const t0 = performance.now();
     const snap = computeCelestialSnapshot(worldHours, latitudeDeg, longitudeDeg, config, true);
@@ -1008,7 +1044,10 @@ export const QWorldSkyPreview: React.FC = () => {
     ctx.clearRect(0, 0, width, height);
 
     const pureView = focusedView !== 'none' && hideFocusHud;
-    const volcanicSample = sampleSyncedVolcanicSky(syncedVolcanicSky, latitudeDeg, longitudeDeg);
+    const volcanicSample = showVolcanoGlow
+      ? sampleSyncedVolcanicSky(syncedVolcanicSky, latitudeDeg, longitudeDeg)
+      : undefined;
+    const twinkleTimeSec = performance.now() * 0.001;
 
     if (projectionMode === 'ground') {
       renderGroundCharacterView(
@@ -1030,7 +1069,9 @@ export const QWorldSkyPreview: React.FC = () => {
         showGlareWashout,
         galaxyAlpha,
         nebulaAlpha,
-        volcanicSample
+        volcanicSample,
+        twinkleTimeSec,
+        twinkleStrength
       );
     } else {
       renderSurroundPanoramaView(
@@ -1051,7 +1092,9 @@ export const QWorldSkyPreview: React.FC = () => {
         showGlareWashout,
         galaxyAlpha,
         nebulaAlpha,
-        volcanicSample
+        volcanicSample,
+        twinkleTimeSec,
+        twinkleStrength
       );
     }
     ctx.restore();
@@ -1077,8 +1120,11 @@ export const QWorldSkyPreview: React.FC = () => {
     showGlareWashout,
     viewportTick,
     syncedVolcanicSky,
+    showVolcanoGlow,
     latitudeDeg,
     longitudeDeg,
+    twinkleStrength,
+    twinkleTick,
   ]);
 
   // Render Zenith Dome Canvas
@@ -1100,7 +1146,10 @@ export const QWorldSkyPreview: React.FC = () => {
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
-    const volcanicSample = sampleSyncedVolcanicSky(syncedVolcanicSky, latitudeDeg, longitudeDeg);
+    const volcanicSample = showVolcanoGlow
+      ? sampleSyncedVolcanicSky(syncedVolcanicSky, latitudeDeg, longitudeDeg)
+      : undefined;
+    const twinkleTimeSec = performance.now() * 0.001;
     renderZenithDome(
       ctx,
       width,
@@ -1115,7 +1164,9 @@ export const QWorldSkyPreview: React.FC = () => {
       bodyNamesAlpha,
       galaxyAlpha,
       nebulaAlpha,
-      volcanicSample
+      volcanicSample,
+      twinkleTimeSec,
+      twinkleStrength
     );
     ctx.restore();
     skyPerfMonitor.recordPhase('render', performance.now() - renderT0);
@@ -1133,8 +1184,11 @@ export const QWorldSkyPreview: React.FC = () => {
     focusedView,
     viewportTick,
     syncedVolcanicSky,
+    showVolcanoGlow,
     latitudeDeg,
     longitudeDeg,
+    twinkleStrength,
+    twinkleTick,
   ]);
 
   // Render Top-Down Orbital Plane Canvas
@@ -1156,10 +1210,20 @@ export const QWorldSkyPreview: React.FC = () => {
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
-    renderOrbitalPlane(ctx, width, height, snapshot, config, bodyNamesAlpha, showGalaxyCloud, showNebula);
+    renderOrbitalPlane(
+      ctx,
+      width,
+      height,
+      snapshot,
+      config,
+      bodyNamesAlpha,
+      showGalaxyCloud,
+      showNebula,
+      lookAzimuthDeg
+    );
     ctx.restore();
     skyPerfMonitor.recordPhase('render', performance.now() - renderT0);
-  }, [snapshot, config, bodyNamesAlpha, showGalaxyCloud, showNebula, focusedView, viewportTick]);
+  }, [snapshot, config, bodyNamesAlpha, showGalaxyCloud, showNebula, lookAzimuthDeg, focusedView, viewportTick]);
 
   const setDayAndHour = (newDayOfYear: number, newYear: number, newLocalHour: number) => {
     const clampedDay = Math.max(1, Math.min(config.daysPerYear, newDayOfYear));
@@ -1220,6 +1284,74 @@ export const QWorldSkyPreview: React.FC = () => {
   const showDome = focusedView === 'none' || focusedView === 'dome';
   const showOrbit = focusedView === 'none' || focusedView === 'orbit';
   const isFocused = focusedView !== 'none';
+
+  const handleResetPerfSpikes = () => {
+    skyPerfMonitor.resetSpikes();
+    setPerfStats(skyPerfMonitor.getSnapshot());
+  };
+
+  const toolbarState: SkyToolbarState = {
+    projectionMode,
+    focusedView,
+    showBodyNames,
+    showConstellations,
+    showMythicArt,
+    showArcs,
+    showGlareWashout,
+    showVolcanoGlow,
+    showQuickSelect,
+    hideFocusHud,
+    showConfigDrawer,
+    showPerfHud,
+    showHelpModal,
+    isBrowserFullscreen,
+  };
+
+  const toolbarActions: SkyToolbarActions = {
+    setProjectionMode,
+    cycleFocusedView: () => {
+      setFocusedView((cur) => (cur === 'none' ? 'preview' : cur === 'preview' ? 'dome' : cur === 'dome' ? 'orbit' : 'none'));
+      setHideFocusHud(false);
+    },
+    toggleBodyNames: () => setShowBodyNames((v) => !v),
+    toggleConstellations: () => setShowConstellations((v) => !v),
+    toggleMythicArt: () => setShowMythicArt((v) => !v),
+    toggleArcs: () => setShowArcs((v) => !v),
+    toggleWashout: () => setShowGlareWashout((v) => !v),
+    toggleVolcanoGlow: () =>
+      setShowVolcanoGlow((v) => {
+        const next = !v;
+        triggerModeToast(next ? '🌋 Volcanic Eruption Glow: ON' : '🌋 Volcanic Eruption Glow: OFF');
+        return next;
+      }),
+    toggleQuickSelect: () => setShowQuickSelect((v) => !v),
+    togglePureView: () => {
+      if (focusedView === 'none') {
+        setFocusedView('preview');
+        setHideFocusHud(true);
+        triggerModeToast('Pure View (UI Hidden) — Press O or Esc to restore UI • P: pan • I: pointer sphere');
+      } else {
+        setHideFocusHud((prev) => {
+          const next = !prev;
+          triggerModeToast(next ? 'Pure View (UI Hidden) — Press O or Esc to restore UI' : 'UI Restored');
+          return next;
+        });
+      }
+    },
+    toggleOrbits: () => {
+      if (isFocused) {
+        setFocusedView('none');
+        setHideFocusHud(false);
+        setShowConfigDrawer(true);
+      } else {
+        setShowConfigDrawer((v) => !v);
+      }
+    },
+    togglePerfHud: () => setShowPerfHud((v) => !v),
+    openCalendar: () => window.open('/?view=calendar', 'adventure2_calendar'),
+    toggleHelpModal: () => setShowHelpModal((v) => !v),
+    toggleBrowserFullscreen,
+  };
   const volcanicHudSample = useMemo(
     () => sampleSyncedVolcanicSky(syncedVolcanicSky, latitudeDeg, longitudeDeg),
     [syncedVolcanicSky, latitudeDeg, longitudeDeg]
@@ -1274,128 +1406,10 @@ export const QWorldSkyPreview: React.FC = () => {
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-              {/* Ground (Character) vs Surround toggle */}
-              <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid #334155' }}>
-                <button
-                  onClick={() => setProjectionMode('ground')}
-                  style={tabBtnStyle(projectionMode === 'ground')}
-                  title="View sky from ground as a character at the pin location (drag/arrows to look around, wheel to zoom) (Key: 1)"
-                >
-                  👁️ Ground View
-                </button>
-                <button
-                  onClick={() => setProjectionMode('surround')}
-                  style={tabBtnStyle(projectionMode === 'surround')}
-                  title="Wide surround horizon panorama (drag/arrows to pan, wheel to zoom) (Key: 2)"
-                >
-                  🏔️ Surround
-                </button>
-              </div>
-
-              <button
-                onClick={() => setShowGalaxyCloud((v) => !v)}
-                style={smallToggleStyle(showGalaxyCloud)}
-                title="Toggle Alien Host Galaxy Cloud / The Astral River (Key: 4)"
-              >
-                🌌 Galaxy
-              </button>
-
-              <button
-                onClick={() => setShowNebula((v) => !v)}
-                style={smallToggleStyle(showNebula)}
-                title="Toggle Deep-Sky Coloured Nebula / The Chrysalis Nebula (Key: 5)"
-              >
-                🌺 Nebula
-              </button>
-
-              <button
-                onClick={() => setShowBodyNames((v) => !v)}
-                style={smallToggleStyle(showBodyNames)}
-                title="Toggle moon & body names (Key: 6)"
-              >
-                🏷️ Names
-              </button>
-
-              <button
-                onClick={() => setShowConstellations((v) => !v)}
-                style={smallToggleStyle(showConstellations)}
-                title="Toggle constellation stick lines & names (Key: 7)"
-              >
-                ✨ Constellations
-              </button>
-
-              <button
-                onClick={() => setShowQuickSelect((v) => !v)}
-                style={smallToggleStyle(showQuickSelect)}
-                title="Quick Select celestial targets & constellations to face them with the camera, even underground (Key: Y)"
-              >
-                🎯 Target (Y)
-              </button>
-
-              <button
-                onClick={() => setShowMythicArt((v) => !v)}
-                style={smallToggleStyle(showMythicArt)}
-                title="Toggle ghostly planetarium artwork over constellations (Key: 8)"
-              >
-                👻 Mythic Art
-              </button>
-
-              <button
-                onClick={() => setShowArcs((v) => !v)}
-                style={smallToggleStyle(showArcs)}
-                title="Toggle 24-hour orbital trajectory arcs (Key: 9)"
-              >
-                Arcs
-              </button>
-
-              <button
-                onClick={() => setShowGlareWashout((v) => !v)}
-                style={smallToggleStyle(showGlareWashout)}
-                title="Toggle Lunar & Solar Glare Washout (dims stars & faint moons near bright Vaelis or Solis) (Key: 0)"
-              >
-                🔆 Washout
-              </button>
-
-              <button
-                onClick={() => setShowConfigDrawer((v) => !v)}
-                style={smallToggleStyle(showConfigDrawer)}
-                title="Customize World, Moon Names & Orbital Mechanics"
-              >
-                ⚙️ Orbits
-              </button>
-
-              <button
-                onClick={() => setShowPerfHud((v) => !v)}
-                style={smallToggleStyle(showPerfHud)}
-                title="Toggle Simulation Timing, GC & Object Pool Telemetry"
-              >
-                📊 Perf
-              </button>
-
-              <button
-                onClick={() => window.open('/?view=calendar', 'adventure2_calendar')}
-                style={smallToggleStyle(false)}
-                title="Open World Calendar in a new tab"
-              >
-                📅 Calendar
-              </button>
-
-              <button
-                onClick={() => setShowHelpModal((v) => !v)}
-                style={smallToggleStyle(showHelpModal)}
-                title="Sky Guide & Documentation (Multi-page Help) (Key: ?)"
-              >
-                ?
-              </button>
-
-              <button
-                onClick={toggleBrowserFullscreen}
-                style={smallToggleStyle(isBrowserFullscreen)}
-                title="Toggle Browser Fullscreen"
-              >
-                {isBrowserFullscreen ? '🗗 Exit FS' : '⛶ Fullscreen'}
-              </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>
+              {renderViewProjectionButtons(toolbarState, toolbarActions, true, 'header')}
+              {renderOverlayIconButtons(toolbarState, toolbarActions, 'header')}
+              {renderToolIconButtons(toolbarState, toolbarActions, 'header')}
             </div>
           </div>
 
@@ -1439,62 +1453,7 @@ export const QWorldSkyPreview: React.FC = () => {
             )}
           </div>
 
-          {showPerfHud && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                flexWrap: 'wrap',
-                padding: '4px 8px',
-                borderRadius: '6px',
-                background: '#020617',
-                border: '1px solid #1e293b',
-                fontSize: '10px',
-                fontFamily: 'monospace',
-                color: '#94a3b8',
-              }}
-            >
-              <span style={{ color: '#38bdf8', fontWeight: 700 }}>FPS: {perfStats.fps}</span>
-              <span>
-                Frame: {perfStats.avgFrameMs.toFixed(1)}ms (max{' '}
-                <strong style={{ color: perfStats.maxSpikeMs > 32 ? '#f87171' : '#cbd5e1' }}>
-                  {perfStats.maxSpikeMs.toFixed(1)}ms
-                </strong>
-                )
-              </span>
-              <span>
-                Snap: {perfStats.lastSnapshotMs.toFixed(2)}ms | Render: {perfStats.lastRenderMs.toFixed(2)}ms | Omen:{' '}
-                {perfStats.lastOmenScanMs.toFixed(1)}ms | Eclipse: {perfStats.lastEclipseScanMs.toFixed(1)}ms
-              </span>
-              <span>
-                Heap: {perfStats.heapUsedMB !== null ? `${perfStats.heapUsedMB.toFixed(1)} MB` : 'n/a'} | Alloc:{' '}
-                {perfStats.allocKBPerSec !== null ? `${perfStats.allocKBPerSec} KB/s` : 'n/a'} | GC: {perfStats.gcCount}
-                {perfStats.gcCount > 0 ? ` (-${perfStats.lastGcFreedMB.toFixed(2)}MB)` : ''}
-              </span>
-              <span>
-                Pool Reuses: <strong style={{ color: '#4ade80' }}>{perfStats.poolReuses.toLocaleString()}</strong> |{' '}
-                Pooling: {perfStats.poolingRecommended ? 'Recommended' : 'Healthy'}
-              </span>
-              <button
-                onClick={() => {
-                  skyPerfMonitor.resetSpikes();
-                  setPerfStats(skyPerfMonitor.getSnapshot());
-                }}
-                style={{
-                  padding: '1px 6px',
-                  fontSize: '10px',
-                  borderRadius: '4px',
-                  border: '1px solid #334155',
-                  background: '#0f172a',
-                  color: '#cbd5e1',
-                  cursor: 'pointer',
-                }}
-              >
-                Reset Spike
-              </button>
-            </div>
-          )}
+          {showPerfHud && renderPerfHudPanel(perfStats, handleResetPerfSpikes)}
         </header>
       )}
 
@@ -1560,11 +1519,18 @@ export const QWorldSkyPreview: React.FC = () => {
                 (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
+                const pos = getCanvasPos(e.clientX, e.clientY);
+                pointerStateRef.current.x = pos.x;
+                pointerStateRef.current.y = pos.y;
+                pointerStateRef.current.isHovering = true;
                 const isPureView = isFocused && hideFocusHud;
                 if (isPureView) {
-                  if (pureMouseMode === 'sphere' && pointerStateRef.current.isDown) {
-                    const pos = getCanvasPos(e.clientX, e.clientY);
-                    movePointer(pos.x, pos.y);
+                  if (pureMouseMode === 'sphere') {
+                    if (pointerStateRef.current.isDown) {
+                      movePointer(pos.x, pos.y);
+                    } else {
+                      hoverPointer(pos.x, pos.y);
+                    }
                     return;
                   } else if (pureMouseMode === 'pan' && dragLookRef.current) {
                     const dx = e.clientX - dragLookRef.current.startX;
@@ -1588,6 +1554,10 @@ export const QWorldSkyPreview: React.FC = () => {
                   const nextPitch = Math.max(-85, Math.min(88, dragLookRef.current.startPitch + dy * 0.22));
                   setLookPitchDeg(nextPitch);
                 }
+              }}
+              onPointerLeave={() => {
+                pointerStateRef.current.isHovering = false;
+                schedulePointerTick();
               }}
               onPointerUp={(e) => {
                 if (pointerStateRef.current.isDown) {
@@ -1694,7 +1664,7 @@ export const QWorldSkyPreview: React.FC = () => {
                         {snapshot.comet.active ? '☄️ Red Harbinger Active' : '☄️ Comet Year'}
                       </span>
                     )}
-                    {(volcanicHudSample.overheadVeil > 0.06 || volcanicHudSample.horizonGlowStrength > 0.08) && (
+                    {showVolcanoGlow && (volcanicHudSample.overheadVeil > 0.06 || volcanicHudSample.horizonGlowStrength > 0.08) && (
                       <span
                         onClick={() => {
                           if (volcanicHudSample.horizonGlowStrength > 0.05) {
@@ -1734,7 +1704,7 @@ export const QWorldSkyPreview: React.FC = () => {
               </div>
             )}
 
-            {/* Top-Right Controls: Cardinal Quick-Look + Ground/Surround (in Focus) + Zoom Fullscreen Toggle */}
+            {/* Top-Right Controls: Fullscreen Overlay/Tool Icon Bar + Compass Quick-Look + Panel Focus Toggle */}
             {!(isFocused && hideFocusHud) && (
               <div
                 style={{
@@ -1743,113 +1713,100 @@ export const QWorldSkyPreview: React.FC = () => {
                   right: '10px',
                   display: 'flex',
                   alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  flexWrap: 'wrap',
                   gap: '6px',
+                  maxWidth: isFocused ? 'calc(100% - 390px)' : 'none',
+                  zIndex: 25,
                 }}
               >
-              {isFocused && (focusedView === 'preview' || focusedView === 'dome') && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  {focusedView === 'preview' && (
-                    <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid #334155' }}>
-                      <button
-                        onClick={() => setProjectionMode('ground')}
-                        style={tabBtnStyle(projectionMode === 'ground')}
-                      >
-                        👁️ Ground
-                      </button>
-                      <button
-                        onClick={() => setProjectionMode('surround')}
-                        style={tabBtnStyle(projectionMode === 'surround')}
-                      >
-                        🏔️ Surround
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setShowConstellations((v) => !v)}
-                    style={smallToggleStyle(showConstellations)}
-                  >
-                    ✨ Lines
-                  </button>
-                  <button
-                    onClick={() => setShowMythicArt((v) => !v)}
-                    style={smallToggleStyle(showMythicArt)}
-                  >
-                    👻 Art
-                  </button>
-                </div>
-              )}
+                {isFocused && (
+                  <>
+                    {renderViewProjectionButtons(toolbarState, toolbarActions, true, 'overlay')}
+                    {renderOverlayIconButtons(toolbarState, toolbarActions, 'overlay')}
+                    {renderToolIconButtons(toolbarState, toolbarActions, 'overlay')}
+                  </>
+                )}
 
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '2px',
-                  background: 'rgba(15, 23, 42, 0.8)',
-                  padding: '3px',
-                  borderRadius: '6px',
-                  border: '1px solid rgba(51, 65, 85, 0.85)',
-                }}
-              >
-                {[
-                  { label: 'N', az: 0 },
-                  { label: 'E', az: 90 },
-                  { label: 'S', az: 180 },
-                  { label: 'W', az: 270 },
-                ].map((dir) => {
-                  const active = Math.abs(wrapAngleDiffDeg(lookAzimuthDeg, dir.az)) < 22;
-                  return (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '2px',
+                    background: 'rgba(15, 23, 42, 0.84)',
+                    padding: '2px 3px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(51, 65, 85, 0.88)',
+                  }}
+                >
+                  {[
+                    { label: 'N', az: 0, title: 'Look North (0°)' },
+                    { label: 'E', az: 90, title: 'Look East (90°)' },
+                    { label: 'S', az: 180, title: 'Look South (180°)' },
+                    { label: 'W', az: 270, title: 'Look West (270°)' },
+                  ].map((dir) => {
+                    const active = Math.abs(wrapAngleDiffDeg(lookAzimuthDeg, dir.az)) < 22;
+                    return (
+                      <button
+                        key={dir.label}
+                        onClick={() => setLookAzimuthDeg(dir.az)}
+                        title={dir.title}
+                        aria-label={dir.title}
+                        style={{
+                          padding: '3px 7px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          borderRadius: '4px',
+                          border: 'none',
+                          background: active ? '#0284c7' : 'transparent',
+                          color: active ? '#f8fafc' : '#94a3b8',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {dir.label}
+                      </button>
+                    );
+                  })}
+                  {projectionMode === 'ground' && (
                     <button
-                      key={dir.label}
-                      onClick={() => setLookAzimuthDeg(dir.az)}
+                      onClick={() => setLookPitchDeg((p) => (p > 55 ? 22 : 70))}
                       style={{
                         padding: '3px 7px',
-                        fontSize: '10px',
+                        fontSize: '11px',
                         fontWeight: 700,
                         borderRadius: '4px',
                         border: 'none',
-                        background: active ? '#0284c7' : 'transparent',
-                        color: active ? '#f8fafc' : '#94a3b8',
+                        background: lookPitchDeg > 55 ? '#0284c7' : 'transparent',
+                        color: lookPitchDeg > 55 ? '#f8fafc' : '#94a3b8',
                         cursor: 'pointer',
                       }}
+                      title={
+                        lookPitchDeg > 55
+                          ? 'Reset gaze pitch down toward the horizon (22°)'
+                          : 'Tilt camera up toward the zenith sky (70°)'
+                      }
+                      aria-label="Toggle zenith vs horizon pitch"
                     >
-                      {dir.label}
+                      ↑
                     </button>
-                  );
-                })}
-                {projectionMode === 'ground' && (
-                  <button
-                    onClick={() => setLookPitchDeg((p) => (p > 55 ? 22 : 70))}
-                    style={{
-                      padding: '3px 7px',
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      borderRadius: '4px',
-                      border: 'none',
-                      background: lookPitchDeg > 55 ? '#0284c7' : 'transparent',
-                      color: lookPitchDeg > 55 ? '#f8fafc' : '#94a3b8',
-                      cursor: 'pointer',
-                    }}
-                    title="Look Up toward Zenith / Reset to Horizon"
-                  >
-                    ↑ Sky
-                  </button>
-                )}
-              </div>
+                  )}
+                </div>
 
-              <button
-                onClick={() => {
-                  setFocusedView(focusedView === 'preview' ? 'none' : 'preview');
-                  setHideFocusHud(false);
-                }}
-                style={focusBtnStyle(focusedView === 'preview')}
-                title={
-                  focusedView === 'preview'
-                    ? 'Exit fullscreen view (Esc) — O hides overlays & cursor'
-                    : 'Zoom Sky Preview to fullscreen (hides all other panels)'
-                }
-              >
-                {focusedView === 'preview' ? '✕ Exit (Esc)' : '⛶'}
-              </button>
-            </div>
+                <button
+                  onClick={() => {
+                    setFocusedView(focusedView === 'preview' ? 'none' : 'preview');
+                    setHideFocusHud(false);
+                  }}
+                  style={focusBtnStyle(focusedView === 'preview')}
+                  title={
+                    focusedView === 'preview'
+                      ? 'Exit Focus View — Return to multi-panel layout (Key: Esc • Cycle panels: 3 • Hide UI: O)'
+                      : 'Focus Sky Preview — Expand Sky Preview to fill view (Key: 3)'
+                  }
+                  aria-label={focusedView === 'preview' ? 'Exit Focus View' : 'Focus Sky Preview'}
+                >
+                  {focusedView === 'preview' ? '✕' : '⛶'}
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -1962,6 +1919,43 @@ export const QWorldSkyPreview: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Floating Fullscreen Toolbar for Zenith Dome / Orbital Plane focus views */}
+      {(focusedView === 'dome' || focusedView === 'orbit') && !hideFocusHud && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '10px',
+            right: '112px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+            maxWidth: 'calc(100vw - 300px)',
+            zIndex: 35,
+          }}
+        >
+          {renderViewProjectionButtons(toolbarState, toolbarActions, false, 'overlay')}
+          {renderOverlayIconButtons(toolbarState, toolbarActions, 'overlay')}
+          {renderToolIconButtons(toolbarState, toolbarActions, 'overlay')}
+        </div>
+      )}
+
+      {/* Floating Telemetry Bar when toggled in Fullscreen Focus Mode */}
+      {isFocused && !hideFocusHud && showPerfHud && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '46px',
+            right: '10px',
+            maxWidth: 'calc(100vw - 20px)',
+            zIndex: 35,
+          }}
+        >
+          {renderPerfHudPanel(perfStats, handleResetPerfSpikes, true)}
+        </div>
+      )}
 
       {/* Bottom Controls, Telemetry Cards & Config Drawer (hidden in single-view fullscreen) */}
       {!isFocused && (
@@ -2823,22 +2817,6 @@ export const QWorldSkyPreview: React.FC = () => {
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e2e8f0', fontSize: '12px' }}>
                   <input
                     type="checkbox"
-                    checked={showGalaxyCloud}
-                    onChange={(e) => setShowGalaxyCloud(e.target.checked)}
-                  />
-                  <span>Show Galaxy Cloud (The Astral River) <span style={{ color: '#94a3b8', fontSize: '10px' }}>(Key: 4)</span></span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e2e8f0', fontSize: '12px' }}>
-                  <input
-                    type="checkbox"
-                    checked={showNebula}
-                    onChange={(e) => setShowNebula(e.target.checked)}
-                  />
-                  <span>Show Coloured Nebula (The Chrysalis Nebula) <span style={{ color: '#94a3b8', fontSize: '10px' }}>(Key: 5)</span></span>
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e2e8f0', fontSize: '12px' }}>
-                  <input
-                    type="checkbox"
                     checked={showGlareWashout}
                     onChange={(e) => setShowGlareWashout(e.target.checked)}
                   />
@@ -3095,7 +3073,7 @@ export const QWorldSkyPreview: React.FC = () => {
             : `Inactive in Year ${snapshot.year} (12y orbit)`,
           color: '#f87171',
           lore: snapshot.comet.active
-            ? `Active Apparition! Sweeping pale red tail (${snapshot.comet.tailWidthDeg.toFixed(1)}° wide, 4× moon width)`
+            ? `Active Apparition! Sweeping pale red mist tail (${snapshot.comet.tailWidthDeg.toFixed(1)}° wide, 8× moon width)`
             : `12-year periodic comet (appears in Year 3 and Year 15) • Click to jump directly to Year 3 apparition & face comet!`,
         });
 
@@ -3528,15 +3506,15 @@ export const QWorldSkyPreview: React.FC = () => {
             sections: [
               {
                 heading: 'The Astral River (Host Galaxy Cloud)',
-                body: 'Spanning across the celestial sphere along an inclined galactic plane (inclination 58°, ascending node 64°) is The Astral River — the glowing starry disc of our host galaxy. Rendered as an ethereal, continuous cosmic mist, it features a warm stellar core bulge, billowing dust ribbons, and dark interstellar dust rifts. Direction indicators on the Orbital Plane show where the galaxy core lies in 3D space. Toggle with Key 4 or in ⚙️ Orbits.',
+                body: 'Spanning across the celestial sphere along an inclined galactic plane (inclination 58°, ascending node 64°) is The Astral River — the glowing starry disc of our host galaxy. Rendered as an ethereal, continuous cosmic mist, it features a warm stellar core bulge, billowing dust ribbons, and dark interstellar dust rifts. Direction indicators on the Orbital Plane show where the galaxy core lies in 3D space. Always visible as a fixed celestial backdrop.',
               },
               {
                 heading: 'The Chrysalis Nebula (The Prismatic Veil)',
-                body: 'Located at RA 218.0°, Dec +34.5° with an 8.2° × 5.0° span, this deep-sky celestial gem glows faintly at night as an ethereal, multi-hued misty gas cloud with an ionized rose core, cyan oxygen envelope, and cosmic violet halo. Indicated with a directional sightline on the Orbital Plane. Toggle with Key 5 or in ⚙️ Orbits.',
+                body: 'Located at RA 218.0°, Dec +34.5° with an 8.2° × 5.0° span, this deep-sky celestial gem glows faintly at night as an ethereal, multi-hued misty gas cloud with an ionized rose core, cyan oxygen envelope, and cosmic violet halo. Indicated with a directional sightline on the Orbital Plane. Always visible as a fixed deep-sky feature.',
               },
               {
                 heading: 'The Red Harbinger (12-Year Periodic Comet)',
-                body: 'Every 12 years (appearing in Year 3 and Year 15), a terrifying pale red periodic comet sweeps through the night sky. Casting a sweeping crimson dust tail 4 times the width arc of the moon (~2.24° wide) across the heavens, it serves as a dreaded omen of war and upheaval for the people of Vaelora.',
+                body: 'Every 12 years (appearing in Year 3 and Year 15), a terrifying pale red periodic comet sweeps through the night sky. Casting a sweeping crimson mist tail 8 times the width arc of the moon (~4.48° wide) across the heavens, it serves as a dreaded omen of war and upheaval for the people of Vaelora.',
               },
               {
                 heading: 'Constellations & Non-Repeating Starfield',
@@ -3553,8 +3531,8 @@ export const QWorldSkyPreview: React.FC = () => {
             subtitle: 'Full reference of all hotkeys, view controls, and engine telemetry',
             sections: [
               {
-                heading: 'Unified 0–9 Feature Hotkeys',
-                body: '[1] Ground View • [2] Surround View • [3] Focus Mode Cycle • [4] Galaxy Cloud • [5] Coloured Nebula • [6] Celestial Body Names • [7] Constellations • [8] Mythic Planetarium Art • [9] Trajectory Arcs • [0] Lunar & Solar Glare Washout.',
+                heading: 'Unified View & Overlay Hotkeys',
+                body: '[1] Ground View • [2] Surround View • [3] Focus Mode Cycle • [6] Celestial Body Names & Text • [7] Constellation Lines • [8] Constellation Pictures (Mythic Art) • [9] Trajectory Arcs • [0] Lunar & Solar Glare Washout • [V] Volcanic Eruption Glow.',
               },
               {
                 heading: 'Targeting & Quick Select (Key: Y)',
@@ -3566,7 +3544,7 @@ export const QWorldSkyPreview: React.FC = () => {
               },
               {
                 heading: 'Camera & Pure View Shortcuts',
-                body: '[Arrow Keys] Pan view left/right & tilt up/down (hold Shift for 3× fast pan) • [O] Pure View (toggle HUD and controls) • [P] Toggle mouse pan in Pure View (pan ⇄ none) • [I] Toggle pointer sphere in Pure View (sphere ⇄ none) • [?] Toggle this Help Dialog • [Esc] Close Dialog / Exit Focus Mode.',
+                body: '[Arrow Keys] Pan view left/right & tilt up/down (hold Shift for 3× fast pan) • [O] Pure View (toggle UI and controls) • [P] Toggle mouse pan in Pure View (pan ⇄ none) • [I] Toggle pointer sphere in Pure View (shows crosshair while aiming, glowing sphere & trail while holding mouse button) • [?] Toggle this Help Dialog • [Esc] Close Dialog / Exit Focus Mode.',
               },
               {
                 heading: 'Mouse Interaction',
@@ -3815,7 +3793,7 @@ function drawVolcanicSkyVeilAndGlow(
   horizonLimitY: number,
   dayFactor: number,
   volcanic: VolcanicSkySample | undefined,
-  projectAzAlt: (az: number, alt: number) => { x: number; y: number; visible: boolean }
+  projectAzAlt: (az: number, alt: number, marginPx?: number) => { x: number; y: number; visible: boolean }
 ): void {
   if (!volcanic) return;
   if (volcanic.overheadVeil > 0.03) {
@@ -3831,7 +3809,7 @@ function drawVolcanicSkyVeilAndGlow(
     ctx.fillRect(0, 0, w, horizonLimitY);
   }
   if (volcanic.horizonGlowStrength > 0.04) {
-    const gp = projectAzAlt(volcanic.horizonGlowAzimuthDeg, 2);
+    const gp = projectAzAlt(volcanic.horizonGlowAzimuthDeg, 2, Math.max(140, w * 0.45));
     if (gp.visible) {
       const s = volcanic.horizonGlowStrength * (1 - dayFactor * 0.42);
       const rad = Math.max(120, w * 0.42);
@@ -3893,7 +3871,9 @@ function renderGroundCharacterView(
   showGlareWashout = true,
   galaxyAlpha = 1,
   nebulaAlpha = 1,
-  volcanicSky?: VolcanicSkySample
+  volcanicSky?: VolcanicSkySample,
+  twinkleTimeSec = 0,
+  twinkleStrength = 0
 ) {
   const isUnderground = lookPitchDeg < -5;
   const azRad = lookAzDeg * DEG_TO_RAD;
@@ -3917,7 +3897,7 @@ function renderGroundCharacterView(
 
   const projectUnitVec = (e: number, n: number, u: number, marginPx = 60): { x: number; y: number; visible: boolean } => {
     const zCam = e * fx + n * fy + u * fz;
-    if (zCam <= 0.08) return { x: 0, y: 0, visible: false };
+    if (zCam <= 0.04) return { x: 0, y: 0, visible: false };
     const xCam = e * rx + n * ry + u * rz;
     const yCam = e * ux + n * uy + u * uz;
     const x = w * 0.5 + (xCam / zCam) * focalPx;
@@ -3926,11 +3906,11 @@ function renderGroundCharacterView(
     return { x, y, visible: inBounds };
   };
 
-  const projectAzAlt = (az: number, alt: number) => {
+  const projectAzAlt = (az: number, alt: number, marginPx = 60) => {
     const aR = az * DEG_TO_RAD;
     const lR = alt * DEG_TO_RAD;
     const cL = Math.cos(lR);
-    return projectUnitVec(cL * Math.sin(aR), cL * Math.cos(aR), Math.sin(lR));
+    return projectUnitVec(cL * Math.sin(aR), cL * Math.cos(aR), Math.sin(lR), marginPx);
   };
 
   // 1. Atmospheric sky background
@@ -3963,7 +3943,7 @@ function renderGroundCharacterView(
 
   // Dawn/Dusk glow at sun's horizon direction
   if (sunAlt > -12 && sunAlt < 16) {
-    const sp = projectAzAlt(snapshot.sun.sky.azimuthDeg, Math.max(0, sunAlt));
+    const sp = projectAzAlt(snapshot.sun.sky.azimuthDeg, Math.max(0, sunAlt), w * 0.45);
     if (sp.visible) {
       const glowStrength = Math.max(0, 1 - Math.abs(sunAlt - 1) / 13) * 0.5 * eclipseDim;
       const dawnGrad = ctx.createRadialGradient(sp.x, sp.y, 10, sp.x, sp.y, w * 0.4);
@@ -3978,12 +3958,29 @@ function renderGroundCharacterView(
   const overheadVeil = volcanicSky?.overheadVeil ?? 0;
   drawVolcanicSkyVeilAndGlow(ctx, w, h, h, dayFactor, volcanicSky, projectAzAlt);
 
+  const degToPx = focalPx * DEG_TO_RAD;
+  const cometVisibility = computeCometSkyVisibility(
+    sunAlt,
+    snapshot.sun.eclipseFraction,
+    overheadVeil,
+    showGlareWashout
+  );
+  // 12-Year Periodic Comet (The Red Harbinger — faintly visible by day, brightest at night)
+  drawComet(
+    ctx,
+    snapshot,
+    (e, n, u) => projectUnitVec(e, n, u, Math.max(w, h) * 0.9),
+    degToPx,
+    cometVisibility,
+    showGlareWashout,
+    bodyNamesAlpha,
+    isUnderground
+  );
+
   // 2. Stars + Constellations + Ghostly Planetarium Art + Galaxy Cloud & Nebula
   const baseStarVis = Math.max(0, Math.min(1, (-sunAlt + 2) / 10)) * (1 - snapshot.lighting.nightIllumination * 0.22);
   const starVisibility = (showGlareWashout ? baseStarVis : Math.max(0.55, baseStarVis)) * (1 - overheadVeil * 0.85);
   if (starVisibility > 0.02) {
-    const degToPx = focalPx * DEG_TO_RAD;
-
     const galaxyMarginPx = Math.max(180, 34 * degToPx);
     const nebulaMarginPx = Math.max(140, 22 * degToPx);
 
@@ -4010,38 +4007,26 @@ function renderGroundCharacterView(
       nebulaAlpha
     );
 
-    // 12-Year Periodic Comet (The Red Harbinger)
-    drawComet(
-      ctx,
-      snapshot,
-      (e, n, u) => projectUnitVec(e, n, u),
-      degToPx,
-      starVisibility,
-      showGlareWashout,
-      bodyNamesAlpha,
-      isUnderground
-    );
-
     for (const s of stars) {
       const hor = starRaDecToHorizontal(s.raRad, s.decRad, snapshot.localSiderealRad, snapshot.latitudeDeg);
       if (!isUnderground && hor.altitudeDeg <= 0.2) continue;
       const p = projectUnitVec(hor.east, hor.north, hor.up);
       if (!p.visible) continue;
       const glare = computeGlareWashoutFactor(hor.east, hor.north, hor.up, snapshot, showGlareWashout);
-      const alpha = (hor.altitudeDeg <= 0.2 ? 0.35 : 1) * starVisibility * glare * (0.24 + 0.76 * (1 - s.mag));
+      const twinkle = computeStarTwinkleFactor(s.raRad, s.decRad, hor.altitudeDeg, twinkleTimeSec, twinkleStrength);
+      const magLum = computeStarPinpointLuminance(s.mag);
+      const alpha = (hor.altitudeDeg <= 0.2 ? 0.35 : 1) * starVisibility * glare * magLum * twinkle.alphaMul;
       if (alpha <= 0.015) continue;
       ctx.fillStyle = s.tint;
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 0.85 + (1 - s.mag) * 1.65, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
     }
     ctx.globalAlpha = 1;
 
     drawConstellationsOverlay(
       ctx,
       snapshot,
-      (sky) => projectUnitVec(sky.east, sky.north, sky.up),
+      (sky) => projectUnitVec(sky.east, sky.north, sky.up, Math.max(320, w * 0.65)),
       starVisibility,
       constellationsAlpha,
       mythicArtAlpha,
@@ -4134,9 +4119,7 @@ function renderGroundCharacterView(
             {
               darkColor: '#03050a',
               litColor: isAsh ? '#8c4638' : 'rgba(62, 72, 88, 0.24)',
-              glowColor: isAsh ? 'rgba(185, 68, 52, 0.85)' : undefined,
-              glowAlpha: isAsh ? 0.36 * bmGlare : 0,
-              rimColor: isAsh ? 'rgba(248, 113, 113, 0.6)' : 'rgba(100, 116, 139, 0.3)',
+              rimColor: showHudLabels ? (isAsh ? 'rgba(248, 113, 113, 0.6)' : 'rgba(100, 116, 139, 0.3)') : undefined,
             }
           );
           ctx.restore();
@@ -4161,17 +4144,6 @@ function renderGroundCharacterView(
       snapshot.trojanCluster.coreSky.up
     );
     const nightBoost = Math.max(0.18, 1 - dayFactor * 0.85);
-
-    if (coreP.visible && snapshot.trojanCluster.coreSky.altitudeDeg > -4) {
-      const veilGrad = ctx.createRadialGradient(coreP.x, coreP.y, 4, coreP.x, coreP.y, 64);
-      const veilAlpha = (0.06 + 0.22 * snapshot.trojanCluster.phaseFraction) * nightBoost;
-      veilGrad.addColorStop(0, `rgba(186, 230, 253, ${veilAlpha})`);
-      veilGrad.addColorStop(1, 'rgba(186, 230, 253, 0)');
-      ctx.fillStyle = veilGrad;
-      ctx.beginPath();
-      ctx.arc(coreP.x, coreP.y, 64, 0, Math.PI * 2);
-      ctx.fill();
-    }
 
     for (const shard of snapshot.trojanCluster.shards) {
       if (!isUnderground && shard.sky.altitudeDeg <= 0) continue;
@@ -4248,9 +4220,7 @@ function renderGroundCharacterView(
           {
             darkColor: '#0b1324',
             litColor: '#f1f5f9',
-            glowColor: 'rgba(186, 230, 253, 0.85)',
-            glowAlpha: (0.14 + 0.4 * snapshot.primaryMoon.phaseFraction) * (1 - dayFactor * 0.65),
-            rimColor: 'rgba(148, 163, 184, 0.32)',
+            rimColor: showHudLabels ? 'rgba(148, 163, 184, 0.32)' : undefined,
             mottle: true,
           }
         );
@@ -4300,13 +4270,15 @@ function renderGroundCharacterView(
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = isUnderground ? 'rgba(56, 189, 248, 0.45)' : 'rgba(100, 116, 139, 0.45)';
-    ctx.lineWidth = isUnderground ? 1.5 : 1;
-    ctx.beginPath();
-    ctx.moveTo(firstX, ridgePoints[0].y);
-    for (const pt of ridgePoints) ctx.lineTo(pt.x, pt.y);
-    ctx.lineTo(lastX, ridgePoints[ridgePoints.length - 1].y);
-    ctx.stroke();
+    if (showHudLabels) {
+      ctx.strokeStyle = isUnderground ? 'rgba(56, 189, 248, 0.45)' : 'rgba(100, 116, 139, 0.45)';
+      ctx.lineWidth = isUnderground ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(firstX, ridgePoints[0].y);
+      for (const pt of ridgePoints) ctx.lineTo(pt.x, pt.y);
+      ctx.lineTo(lastX, ridgePoints[ridgePoints.length - 1].y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -4426,16 +4398,19 @@ function renderSurroundPanoramaView(
   showGlareWashout = true,
   galaxyAlpha = 1,
   nebulaAlpha = 1,
-  volcanicSky?: VolcanicSkySample
+  volcanicSky?: VolcanicSkySample,
+  twinkleTimeSec = 0,
+  twinkleStrength = 0
 ) {
   const horizonY = h * 0.85;
   const maxAltDeg = 86;
 
-  const projectAzAlt = (azDeg: number, altDeg: number): { x: number; y: number; visible: boolean } => {
+  const projectAzAlt = (azDeg: number, altDeg: number, marginPx = 60): { x: number; y: number; visible: boolean } => {
     const dAz = wrapAngleDiffDeg(azDeg, centerAzDeg);
     const x = w * 0.5 + (dAz / fovDeg) * w;
     const y = horizonY - (altDeg / maxAltDeg) * (horizonY - 14);
-    return { x, y, visible: Math.abs(dAz) <= fovDeg * 0.56 };
+    const marginDeg = Math.max(fovDeg * 0.06, (marginPx / Math.max(1, w)) * fovDeg);
+    return { x, y, visible: Math.abs(dAz) <= fovDeg * 0.5 + marginDeg };
   };
 
   const sunAlt = snapshot.sun.sky.altitudeDeg;
@@ -4466,7 +4441,7 @@ function renderSurroundPanoramaView(
   ctx.fillRect(0, 0, w, horizonY + 2);
 
   if (sunAlt > -12 && sunAlt < 16) {
-    const sunProj = projectAzAlt(snapshot.sun.sky.azimuthDeg, Math.max(0, sunAlt));
+    const sunProj = projectAzAlt(snapshot.sun.sky.azimuthDeg, Math.max(0, sunAlt), w * 0.4);
     if (sunProj.visible) {
       const glowStrength = Math.max(0, 1 - Math.abs(sunAlt - 1) / 13) * 0.55 * eclipseDim;
       const dawnGrad = ctx.createRadialGradient(sunProj.x, horizonY, 8, sunProj.x, horizonY, w * 0.36);
@@ -4481,10 +4456,32 @@ function renderSurroundPanoramaView(
   const overheadVeil = volcanicSky?.overheadVeil ?? 0;
   drawVolcanicSkyVeilAndGlow(ctx, w, horizonY, horizonY, dayFactor, volcanicSky, projectAzAlt);
 
+  const degToPx = w / fovDeg;
+  const cometVisibility = computeCometSkyVisibility(
+    sunAlt,
+    snapshot.sun.eclipseFraction,
+    overheadVeil,
+    showGlareWashout
+  );
+  // 12-Year Periodic Comet (The Red Harbinger — faintly visible by day, brightest at night)
+  drawComet(
+    ctx,
+    snapshot,
+    (e, n, u) => {
+      const az = ((Math.atan2(e, n) * (180 / Math.PI)) % 360 + 360) % 360;
+      const alt = Math.asin(Math.max(-1, Math.min(1, u))) * (180 / Math.PI);
+      return projectAzAlt(az, alt, Math.max(w, h) * 0.9);
+    },
+    degToPx,
+    cometVisibility,
+    showGlareWashout,
+    bodyNamesAlpha,
+    false
+  );
+
   const baseStarVis = Math.max(0, Math.min(1, (-sunAlt + 2) / 10)) * (1 - snapshot.lighting.nightIllumination * 0.22);
   const starVisibility = (showGlareWashout ? baseStarVis : Math.max(0.55, baseStarVis)) * (1 - overheadVeil * 0.85);
   if (starVisibility > 0.02) {
-    const degToPx = w / fovDeg;
     const projectSurroundCloud = (sky: SkyVectorHorizontal) => {
       if (sky.altitudeDeg <= -18) return { x: 0, y: 0, visible: false };
       const p = projectAzAlt(sky.azimuthDeg, sky.altitudeDeg);
@@ -4515,36 +4512,19 @@ function renderSurroundPanoramaView(
       nebulaAlpha
     );
 
-    // 12-Year Periodic Comet (The Red Harbinger)
-    drawComet(
-      ctx,
-      snapshot,
-      (e, n, u) => {
-        const az = ((Math.atan2(e, n) * (180 / Math.PI)) % 360 + 360) % 360;
-        const alt = Math.asin(Math.max(-1, Math.min(1, u))) * (180 / Math.PI);
-        const p = projectAzAlt(az, alt);
-        return { x: p.x, y: p.y, visible: p.visible && p.y < horizonY };
-      },
-      degToPx,
-      starVisibility,
-      showGlareWashout,
-      bodyNamesAlpha,
-      false
-    );
-
     for (const s of stars) {
       const hor = starRaDecToHorizontal(s.raRad, s.decRad, snapshot.localSiderealRad, snapshot.latitudeDeg);
       if (hor.altitudeDeg <= 0.2) continue;
       const p = projectAzAlt(hor.azimuthDeg, hor.altitudeDeg);
       if (!p.visible || p.y >= horizonY) continue;
       const glare = computeGlareWashoutFactor(hor.east, hor.north, hor.up, snapshot, showGlareWashout);
-      const alpha = starVisibility * glare * (0.22 + 0.78 * (1 - s.mag));
+      const twinkle = computeStarTwinkleFactor(s.raRad, s.decRad, hor.altitudeDeg, twinkleTimeSec, twinkleStrength);
+      const magLum = computeStarPinpointLuminance(s.mag);
+      const alpha = starVisibility * glare * magLum * twinkle.alphaMul;
       if (alpha <= 0.015) continue;
       ctx.fillStyle = s.tint;
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 0.75 + (1 - s.mag) * 1.45, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
     }
     ctx.globalAlpha = 1;
 
@@ -4552,9 +4532,8 @@ function renderSurroundPanoramaView(
       ctx,
       snapshot,
       (sky) => {
-        if (sky.altitudeDeg <= 0.2) return { x: 0, y: 0, visible: false };
-        const p = projectAzAlt(sky.azimuthDeg, sky.altitudeDeg);
-        return { x: p.x, y: p.y, visible: p.visible && p.y < horizonY };
+        if (sky.altitudeDeg <= -28) return { x: 0, y: 0, visible: false };
+        return projectAzAlt(sky.azimuthDeg, sky.altitudeDeg, Math.max(320, w * 0.65));
       },
       starVisibility,
       constellationsAlpha,
@@ -4609,9 +4588,7 @@ function renderSurroundPanoramaView(
           {
             darkColor: '#03050a',
             litColor: isAsh ? '#8c4638' : 'rgba(62, 72, 88, 0.24)',
-            glowColor: isAsh ? 'rgba(185, 68, 52, 0.85)' : undefined,
-            glowAlpha: isAsh ? 0.34 * bmGlare : 0,
-            rimColor: isAsh ? 'rgba(248, 113, 113, 0.55)' : 'rgba(100, 116, 139, 0.28)',
+            rimColor: showHudLabels ? (isAsh ? 'rgba(248, 113, 113, 0.55)' : 'rgba(100, 116, 139, 0.28)') : undefined,
           }
         );
         ctx.restore();
@@ -4628,22 +4605,7 @@ function renderSurroundPanoramaView(
   }
 
   if (config.trojanCluster.enabled) {
-    const coreP = projectAzAlt(
-      snapshot.trojanCluster.coreSky.azimuthDeg,
-      snapshot.trojanCluster.coreSky.altitudeDeg
-    );
     const nightBoost = Math.max(0.18, 1 - dayFactor * 0.85);
-
-    if (coreP.visible && snapshot.trojanCluster.coreSky.altitudeDeg > -4) {
-      const veilGrad = ctx.createRadialGradient(coreP.x, coreP.y, 2, coreP.x, coreP.y, 48);
-      const veilAlpha = (0.06 + 0.22 * snapshot.trojanCluster.phaseFraction) * nightBoost;
-      veilGrad.addColorStop(0, `rgba(186, 230, 253, ${veilAlpha})`);
-      veilGrad.addColorStop(1, 'rgba(186, 230, 253, 0)');
-      ctx.fillStyle = veilGrad;
-      ctx.beginPath();
-      ctx.arc(coreP.x, coreP.y, 48, 0, Math.PI * 2);
-      ctx.fill();
-    }
 
     for (const shard of snapshot.trojanCluster.shards) {
       if (shard.sky.altitudeDeg <= -0.5) continue;
@@ -4673,9 +4635,7 @@ function renderSurroundPanoramaView(
         {
           darkColor: '#0b1324',
           litColor: '#f1f5f9',
-          glowColor: 'rgba(186, 230, 253, 0.85)',
-          glowAlpha: (0.12 + 0.38 * snapshot.primaryMoon.phaseFraction) * (1 - dayFactor * 0.65),
-          rimColor: 'rgba(148, 163, 184, 0.3)',
+          rimColor: showHudLabels ? 'rgba(148, 163, 184, 0.3)' : undefined,
           mottle: true,
         }
       );
@@ -4713,14 +4673,14 @@ function renderSurroundPanoramaView(
   ctx.closePath();
   ctx.fill();
 
-  ctx.strokeStyle = 'rgba(100, 116, 139, 0.4)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, horizonY);
-  ctx.lineTo(w, horizonY);
-  ctx.stroke();
-
   if (showHudLabels) {
+    ctx.strokeStyle = 'rgba(100, 116, 139, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY);
+    ctx.lineTo(w, horizonY);
+    ctx.stroke();
+
     const cardinals: Record<number, string> = {
       0: 'N',
       45: 'NE',
@@ -4909,7 +4869,7 @@ function drawGalaxyMistRun(
       runTangentAt(i),
       stampLenPx,
       56 * degToPx,
-      totalAlpha * curr.glare * 0.22
+      totalAlpha * curr.glare * 0.055
     );
   }
 
@@ -4924,7 +4884,7 @@ function drawGalaxyMistRun(
       runTangentAt(coreIdx),
       115 * degToPx,
       52 * degToPx,
-      totalAlpha * corePt.glare * 0.46
+      totalAlpha * corePt.glare * 0.13
     );
   }
 
@@ -4940,7 +4900,7 @@ function drawGalaxyMistRun(
         runTangentAt(i),
         riftLenPx,
         12 * degToPx,
-        totalAlpha * curr.glare * 0.34
+        totalAlpha * curr.glare * 0.14
       );
       continue;
     }
@@ -4954,7 +4914,7 @@ function drawGalaxyMistRun(
       runTangentAt(i),
       curr.node.radiusDeg * degToPx * 7.8,
       curr.node.radiusDeg * degToPx * 1.6,
-      curr.node.opacity * totalAlpha * curr.glare * 1.15
+      curr.node.opacity * totalAlpha * curr.glare * 0.28
     );
   }
 }
@@ -5036,25 +4996,22 @@ function drawColouredNebula(
 
 /**
  * Renders the 12-year periodic comet (The Red Harbinger / The Bleeding Star)
- * featuring a pale red glowing coma and a sweeping crimson fan tail
- * that spans 4 times the width arc of the moon across the sky, pointing away from Solis.
+ * featuring a pale red glowing coma and soft fading mist ion & dust tails
+ * spanning 8 times the width arc of the moon across the sky, pointing away from Solis.
  */
 function drawComet(
   ctx: CanvasRenderingContext2D,
   snapshot: CelestialSnapshot,
   projectUnitVec: (e: number, n: number, u: number) => { x: number; y: number; visible: boolean },
   degToPx: number,
-  starVisibility: number,
+  cometVisibility: number,
   showGlareWashout: boolean,
   bodyNamesAlpha = 1,
   allowUnderground = false
 ) {
   const comet = snapshot.comet;
   if (!comet || !comet.active) return;
-  if (!allowUnderground && comet.sky.altitudeDeg < -2) return;
-
-  const cp = projectUnitVec(comet.sky.east, comet.sky.north, comet.sky.up);
-  if (!cp.visible) return;
+  if (!allowUnderground && comet.sky.altitudeDeg < -40) return;
 
   const sunSky = snapshot.sun.sky;
   // Comet tail streams antisolar (directly away from Solis)
@@ -5073,108 +5030,111 @@ function drawComet(
   }
 
   const tailLengthDeg = comet.tailLengthDeg;
-  // Tail width is strictly 4 times the width arc of the moon (~2.24°)
   const tailWidthDeg = comet.tailWidthDeg;
-
-  // Project tail tip on celestial sphere
   const stepRad = tailLengthDeg * DEG_TO_RAD;
-  const tipE = comet.sky.east + Math.sin(stepRad) * tE;
-  const tipN = comet.sky.north + Math.sin(stepRad) * tN;
-  const tipU = comet.sky.up + Math.sin(stepRad) * tU;
-  const tipLen = Math.hypot(tipE, tipN, tipU);
-  const tipProj = projectUnitVec(tipE / tipLen, tipN / tipLen, tipU / tipLen);
 
-  let dx = tipProj.visible ? tipProj.x - cp.x : tE * tailLengthDeg * degToPx;
-  let dy = tipProj.visible ? tipProj.y - cp.y : -tU * tailLengthDeg * degToPx;
+  const projectSpineSample = (frac: number) => {
+    const sinStep = Math.sin(stepRad * frac);
+    const sx = comet.sky.east + sinStep * tE;
+    const sy = comet.sky.north + sinStep * tN;
+    const sz = comet.sky.up + sinStep * tU;
+    const sLen = Math.hypot(sx, sy, sz) || 1;
+    return { proj: projectUnitVec(sx / sLen, sy / sLen, sz / sLen), up: sz / sLen };
+  };
+
+  const cpRaw = projectUnitVec(comet.sky.east, comet.sky.north, comet.sky.up);
+  const midSample = projectSpineSample(0.5);
+  const tipSample = projectSpineSample(1.0);
+
+  if (!cpRaw.visible && !midSample.proj.visible && !tipSample.proj.visible) return;
+  if (!allowUnderground && comet.sky.up <= -0.03 && midSample.up <= -0.03 && tipSample.up <= -0.03) return;
+
+  let cpX = cpRaw.x;
+  let cpY = cpRaw.y;
+  let dx = tE * tailLengthDeg * degToPx;
+  let dy = -tU * tailLengthDeg * degToPx;
+
+  if (cpRaw.visible && tipSample.proj.visible) {
+    dx = tipSample.proj.x - cpX;
+    dy = tipSample.proj.y - cpY;
+  } else if (cpRaw.visible && midSample.proj.visible) {
+    dx = (midSample.proj.x - cpX) * 2;
+    dy = (midSample.proj.y - cpY) * 2;
+  } else if (midSample.proj.visible && tipSample.proj.visible) {
+    dx = (tipSample.proj.x - midSample.proj.x) * 2;
+    dy = (tipSample.proj.y - midSample.proj.y) * 2;
+    cpX = tipSample.proj.x - dx;
+    cpY = tipSample.proj.y - dy;
+  } else if (!cpRaw.visible) {
+    if (tipSample.proj.visible) {
+      cpX = tipSample.proj.x - dx;
+      cpY = tipSample.proj.y - dy;
+    } else {
+      cpX = midSample.proj.x - dx * 0.5;
+      cpY = midSample.proj.y - dy * 0.5;
+    }
+  }
+
+  // Guard against panoramic 360° azimuth seam wrap
+  if (Math.hypot(dx, dy) > Math.max(600, tailLengthDeg * degToPx * 2.5)) {
+    dx = tE * tailLengthDeg * degToPx;
+    dy = -tU * tailLengthDeg * degToPx;
+  }
+
   const screenTailLen = Math.hypot(dx, dy);
   if (screenTailLen < 2) return;
 
-  const dirX = dx / screenTailLen;
-  const dirY = dy / screenTailLen;
-  const perpX = -dirY;
-  const perpY = dirX;
-
-  const tailWidthPx = Math.max(14, tailWidthDeg * degToPx);
-  const halfWidth = tailWidthPx * 0.5;
+  const tailAngle = Math.atan2(dy, dx);
+  const tailWidthPx = Math.max(24, tailWidthDeg * degToPx);
+  const mist = getQWorldSkyMistTextures();
 
   ctx.save();
-  const glare = computeGlareWashoutFactor(comet.sky.east, comet.sky.north, comet.sky.up, snapshot, showGlareWashout);
+  const rawGlare = computeGlareWashoutFactor(comet.sky.east, comet.sky.north, comet.sky.up, snapshot, showGlareWashout);
+  const glare = Math.max(0.35, rawGlare);
   const cometAlpha =
     (allowUnderground && comet.sky.altitudeDeg < 0 ? 0.65 : 1.0) *
-    Math.min(1, Math.max(0.35, starVisibility * 1.2)) *
+    cometVisibility *
     glare *
-    (0.4 + 0.6 * comet.activityFraction);
+    (0.45 + 0.55 * comet.activityFraction);
 
-  ctx.globalAlpha = cometAlpha;
+  // 1. Broad Sweeping Crimson Dust & Ion Mist Plume (double moon-width spread)
+  const drawLen = (screenTailLen * 1.18) / 0.90;
+  const drawWidth = Math.max(32, tailWidthPx * 2.25);
 
-  // 1. Broad Pale Red Sweeping Fan Tail (4x moon width arc)
-  const tipX = cp.x + dx;
-  const tipY = cp.y + dy;
+  ctx.save();
+  ctx.translate(cpX, cpY);
+  ctx.rotate(tailAngle);
+  ctx.globalAlpha = cometAlpha * 0.9;
+  ctx.drawImage(mist.cometTailMist, -0.10 * drawLen, -0.5 * drawWidth, drawLen, drawWidth);
 
-  ctx.beginPath();
-  ctx.moveTo(cp.x, cp.y);
-  const curveOffset = screenTailLen * 0.08;
-  const ctrlX1 = cp.x + dirX * screenTailLen * 0.45 + perpX * (halfWidth * 0.35 + curveOffset);
-  const ctrlY1 = cp.y + dirY * screenTailLen * 0.45 + perpY * (halfWidth * 0.35 + curveOffset);
-  const tipLeftX = tipX + perpX * halfWidth;
-  const tipLeftY = tipY + perpY * halfWidth;
-  ctx.quadraticCurveTo(ctrlX1, ctrlY1, tipLeftX, tipLeftY);
-
-  ctx.quadraticCurveTo(
-    tipX + dirX * (tailWidthPx * 0.2),
-    tipY + dirY * (tailWidthPx * 0.2),
-    tipX - perpX * (halfWidth * 0.8),
-    tipY - perpY * (halfWidth * 0.8)
-  );
-
-  const ctrlX2 = cp.x + dirX * screenTailLen * 0.5 - perpX * (halfWidth * 0.3 - curveOffset * 0.5);
-  const ctrlY2 = cp.y + dirY * screenTailLen * 0.5 - perpY * (halfWidth * 0.3 - curveOffset * 0.5);
-  ctx.quadraticCurveTo(ctrlX2, ctrlY2, cp.x, cp.y);
-  ctx.closePath();
-
-  const tailGrad = ctx.createLinearGradient(cp.x, cp.y, tipX, tipY);
-  tailGrad.addColorStop(0, 'rgba(248, 113, 113, 0.55)');
-  tailGrad.addColorStop(0.25, 'rgba(239, 68, 68, 0.38)');
-  tailGrad.addColorStop(0.7, 'rgba(220, 38, 38, 0.15)');
-  tailGrad.addColorStop(1, 'rgba(185, 28, 28, 0)');
-  ctx.fillStyle = tailGrad;
-  ctx.fill();
-
-  // 2. Slender Luminous Ion Tail Needle along antisolar spine
-  ctx.beginPath();
-  ctx.moveTo(cp.x, cp.y);
-  const ionTipX = cp.x + dirX * (screenTailLen * 1.15);
-  const ionTipY = cp.y + dirY * (screenTailLen * 1.15);
-  ctx.lineTo(ionTipX, ionTipY);
-  const ionGrad = ctx.createLinearGradient(cp.x, cp.y, ionTipX, ionTipY);
-  ionGrad.addColorStop(0, 'rgba(254, 202, 202, 0.85)');
-  ionGrad.addColorStop(0.25, 'rgba(248, 113, 113, 0.55)');
-  ionGrad.addColorStop(0.75, 'rgba(239, 68, 68, 0.2)');
-  ionGrad.addColorStop(1, 'rgba(239, 68, 68, 0)');
-  ctx.strokeStyle = ionGrad;
-  ctx.lineWidth = Math.max(1.5, tailWidthPx * 0.12);
-  ctx.stroke();
+  // 2. Soft Luminous Inner Ion Mist fading smoothly away from the coma
+  const innerLen = drawLen * 0.85;
+  const innerWidth = drawWidth * 0.42;
+  ctx.globalAlpha = cometAlpha * 0.6;
+  ctx.drawImage(mist.cometTailMist, -0.10 * innerLen, -0.5 * innerWidth, innerLen, innerWidth);
+  ctx.restore();
 
   // 3. Pale Red Glowing Coma & Stellar Nucleus
-  const comaRad = Math.max(5, degToPx * 0.38);
-  const comaGrad = ctx.createRadialGradient(cp.x, cp.y, 1, cp.x, cp.y, comaRad * 2.8);
+  ctx.globalAlpha = cometAlpha;
+  const comaRad = Math.max(6, degToPx * 0.52);
+  const comaGrad = ctx.createRadialGradient(cpX, cpY, 1, cpX, cpY, comaRad * 2.8);
   comaGrad.addColorStop(0, 'rgba(255, 241, 242, 0.95)');
   comaGrad.addColorStop(0.2, 'rgba(254, 205, 211, 0.85)');
   comaGrad.addColorStop(0.5, 'rgba(244, 63, 94, 0.45)');
   comaGrad.addColorStop(1, 'rgba(225, 29, 72, 0)');
   ctx.fillStyle = comaGrad;
   ctx.beginPath();
-  ctx.arc(cp.x, cp.y, comaRad * 2.8, 0, Math.PI * 2);
+  ctx.arc(cpX, cpY, comaRad * 2.8, 0, Math.PI * 2);
   ctx.fill();
 
   // Stellar nucleus point
   ctx.fillStyle = '#fff1f2';
   ctx.beginPath();
-  ctx.arc(cp.x, cp.y, Math.max(1.6, comaRad * 0.28), 0, Math.PI * 2);
+  ctx.arc(cpX, cpY, Math.max(1.8, comaRad * 0.28), 0, Math.PI * 2);
   ctx.fill();
 
   // 4. Label
-  if (bodyNamesAlpha > 0.005) {
+  if (bodyNamesAlpha > 0.005 && cpRaw.visible) {
     ctx.globalAlpha = bodyNamesAlpha * cometAlpha;
     ctx.fillStyle = '#fca5a5';
     ctx.font = 'bold 11px system-ui, sans-serif';
@@ -5182,7 +5142,7 @@ function drawComet(
       allowUnderground && comet.sky.altitudeDeg < 0
         ? `☄️ ${comet.name} (Underground ${Math.round(comet.sky.altitudeDeg)}°)`
         : `☄️ ${comet.name}`;
-    ctx.fillText(labelText, cp.x + comaRad * 1.4, cp.y + 4);
+    ctx.fillText(labelText, cpX + comaRad * 1.4, cpY + 4);
   }
 
   ctx.restore();
@@ -5202,6 +5162,7 @@ function drawConstellationsOverlay(
   compact: boolean,
   allowUnderground = false
 ) {
+  if (linesAlpha <= 0.005 && artAlpha <= 0.005) return;
   ctx.save();
 
   for (const con of WORLD_CONSTELLATIONS) {
@@ -5212,24 +5173,27 @@ function drawConstellationsOverlay(
         snapshot.localSiderealRad,
         snapshot.latitudeDeg
       );
-      const p = (hor.altitudeDeg > 0.1 || allowUnderground) ? projectSky(hor) : { x: 0, y: 0, visible: false };
+      const p = (hor.altitudeDeg > -28 || allowUnderground) ? projectSky(hor) : { x: 0, y: 0, visible: false };
       return { st, hor, p };
     });
 
     const visibleCount = projectedStars.filter((s) => s.p.visible).length;
-    if (visibleCount === 0) continue;
+    const anyStarAbove = allowUnderground || projectedStars.some((s) => s.hor.altitudeDeg > -2);
+    if (visibleCount === 0 || !anyStarAbove) continue;
 
     // 1. Ghostly Planetarium Artwork (projected in exact sky coordinates so it rotates & zooms with the stars)
-    if (artAlpha > 0.005 && visibleCount >= 2) {
+    if (artAlpha > 0.005) {
       ctx.save();
       for (const path of con.artPaths) {
         const pts = path.points.map(([u, v]) => {
           const hor = projectConstellationArtPoint(con, u, v, snapshot.localSiderealRad, snapshot.latitudeDeg);
-          return (hor.altitudeDeg > -2 || allowUnderground) ? projectSky(hor) : { x: 0, y: 0, visible: false };
+          const proj = (hor.altitudeDeg > -28 || allowUnderground) ? projectSky(hor) : { x: 0, y: 0, visible: false };
+          return { x: proj.x, y: proj.y, visible: proj.visible, alt: hor.altitudeDeg };
         });
 
+        const hasAboveHorizon = allowUnderground || pts.some((pt) => pt.alt > -1);
         // Skip segments that wrap across panoramic edges
-        let valid = pts.every((pt) => pt.visible);
+        let valid = hasAboveHorizon && pts.every((pt) => pt.visible);
         if (valid) {
           for (let i = 1; i < pts.length; i++) {
             if (Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) > 420) {
@@ -5273,6 +5237,7 @@ function drawConstellationsOverlay(
         const a = projectedStars[aIdx];
         const b = projectedStars[bIdx];
         if (!a || !b || !a.p.visible || !b.p.visible) continue;
+        if (!allowUnderground && a.hor.altitudeDeg <= 0 && b.hor.altitudeDeg <= 0) continue;
         if (Math.hypot(a.p.x - b.p.x, a.p.y - b.p.y) > 420) continue;
         ctx.moveTo(a.p.x, a.p.y);
         ctx.lineTo(b.p.x, b.p.y);
@@ -5280,31 +5245,6 @@ function drawConstellationsOverlay(
       ctx.stroke();
       ctx.restore();
     }
-
-    // 3. Bright Anchor Stars (always rendered so the patterns are physically consistent)
-    for (const item of projectedStars) {
-      if (!item.p.visible) continue;
-      const r = (compact ? 1.2 : 1.5) + (1 - item.st.mag) * (compact ? 1.2 : 1.9);
-      ctx.fillStyle = item.st.tint;
-      ctx.globalAlpha = Math.min(1, starVisibility * (0.65 + 0.35 * (1 - item.st.mag)));
-      ctx.beginPath();
-      ctx.arc(item.p.x, item.p.y, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Subtle cross-flare on 1st-magnitude named anchor stars
-      if (!compact && item.st.mag <= 0.16 && starVisibility > 0.35) {
-        ctx.strokeStyle = item.st.tint;
-        ctx.globalAlpha = starVisibility * 0.45;
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(item.p.x - r * 2.2, item.p.y);
-        ctx.lineTo(item.p.x + r * 2.2, item.p.y);
-        ctx.moveTo(item.p.x, item.p.y - r * 2.2);
-        ctx.lineTo(item.p.x, item.p.y + r * 2.2);
-        ctx.stroke();
-      }
-    }
-    ctx.globalAlpha = 1;
 
     // 4. Constellation Label at Anchor Center
     if (linesAlpha > 0.005 && visibleCount >= 2) {
@@ -5354,7 +5294,9 @@ function renderZenithDome(
   bodyNamesAlpha = 1,
   galaxyAlpha = 1,
   nebulaAlpha = 1,
-  volcanicSky?: VolcanicSkySample
+  volcanicSky?: VolcanicSkySample,
+  twinkleTimeSec = 0,
+  twinkleStrength = 0
 ) {
   ctx.fillStyle = '#040914';
   ctx.fillRect(0, 0, w, h);
@@ -5424,7 +5366,7 @@ function renderZenithDome(
   };
 
   const domeDegToPx = domeR / 90;
-  drawGalaxyCloud(ctx, snapshot, projectDomeSky, domeDegToPx, 0.92, false, galaxyAlpha);
+  drawGalaxyCloud(ctx, snapshot, projectDomeSky, domeDegToPx, 0.55, false, galaxyAlpha);
   drawColouredNebula(ctx, snapshot, projectDomeSky, domeDegToPx, 0.92, false, bodyNamesAlpha, nebulaAlpha);
   drawComet(
     ctx,
@@ -5450,11 +5392,13 @@ function renderZenithDome(
     const hor = starRaDecToHorizontal(s.raRad, s.decRad, snapshot.localSiderealRad, snapshot.latitudeDeg);
     if (hor.altitudeDeg <= 0) continue;
     const p = projectDome(hor);
+    const twinkle = computeStarTwinkleFactor(s.raRad, s.decRad, hor.altitudeDeg, twinkleTimeSec, twinkleStrength);
+    const magLum = computeStarPinpointLuminance(s.mag);
+    const alpha = magLum * domeStarScale * twinkle.alphaMul;
+    if (alpha <= 0.015) continue;
     ctx.fillStyle = s.tint;
-    ctx.globalAlpha = (0.25 + 0.65 * (1 - s.mag)) * domeStarScale;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 0.7 + (1 - s.mag) * 1.15, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
   }
   ctx.globalAlpha = 1;
 
@@ -5549,6 +5493,59 @@ function renderZenithDome(
 // 3. Top-Down Orbital Plane Renderer
 // ============================================================================
 
+function drawOrbitChevron(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  angleRad: number,
+  ccwDir: 1 | -1,
+  color: string
+) {
+  const px = cx + Math.cos(angleRad) * radius;
+  const py = cy - Math.sin(angleRad) * radius;
+  const tang = Math.atan2(-ccwDir * Math.cos(angleRad), -ccwDir * Math.sin(angleRad));
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(tang);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(-4, -3);
+  ctx.lineTo(2, 0);
+  ctx.lineTo(-4, 3);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawOrbitalTrojanSwarm(
+  ctx: CanvasRenderingContext2D,
+  orbCx: number,
+  orbCy: number,
+  innerR: number,
+  snapshot: CelestialSnapshot,
+  config: CelestialWorldConfig
+) {
+  const pmAng = snapshot.primaryMoon.orbitalAngleRad;
+  const lagSign = config.trojanCluster.lagrangePoint === 'L4' ? 1 : -1;
+  const count = Math.min(config.trojanCluster.shardCount, 44);
+  for (let i = 0; i < count; i++) {
+    const u1 = ((i * 0.61803398875 + 0.17) % 1 + 1) % 1;
+    const u2 = ((i * 0.75487766625 + 0.43) % 1 + 1) % 1;
+    const u4 = ((i * 0.8191725133961644 + 0.37) % 1 + 1) % 1;
+    const signed = u1 < 0.55 ? -(u1 / 0.55) * 0.42 : ((u1 - 0.55) / 0.45) * 0.58;
+    const radialWeight = Math.pow(u2, 0.7);
+    const lagOffsetDeg = signed * config.trojanCluster.arcSpreadDeg * (0.35 + 0.65 * radialWeight);
+    const ang = pmAng + lagSign * (config.trojanCluster.lagCenterDeg + lagOffsetDeg) * DEG_TO_RAD;
+    const r = innerR + (u4 * 2 - 1) * 3.8 * (1 - Math.abs(signed) * 0.45);
+    const size = i < 5 ? 1.55 : 0.75 + (1 - Math.abs(signed)) * 0.55;
+    ctx.fillStyle = i < 5 ? 'rgba(224, 242, 254, 0.92)' : 'rgba(186, 230, 253, 0.62)';
+    ctx.beginPath();
+    ctx.arc(orbCx + Math.cos(ang) * r, orbCy - Math.sin(ang) * r, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function renderOrbitalPlane(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -5557,7 +5554,8 @@ function renderOrbitalPlane(
   config: CelestialWorldConfig,
   bodyNamesAlpha = 1,
   showGalaxy = true,
-  showNebula = true
+  showNebula = true,
+  lookAzDeg = 180
 ) {
   ctx.fillStyle = '#040914';
   ctx.fillRect(0, 0, w, h);
@@ -5624,22 +5622,37 @@ function renderOrbitalPlane(
   ctx.restore();
 
   const obsAngle = snapshot.localSiderealRad;
+  const obsX = orbCx + Math.cos(obsAngle) * planetR;
+  const obsY = orbCy - Math.sin(obsAngle) * planetR;
+  const ewComponent = Math.sin(lookAzDeg * DEG_TO_RAD);
+  const sightAngle = obsAngle + ewComponent * 0.95;
+  ctx.strokeStyle = 'rgba(74, 222, 128, 0.55)';
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(obsX, obsY);
+  ctx.lineTo(obsX + Math.cos(sightAngle) * (planetR * 1.45), obsY - Math.sin(sightAngle) * (planetR * 1.45));
+  ctx.stroke();
+
   ctx.fillStyle = '#4ade80';
   ctx.beginPath();
-  ctx.arc(orbCx + Math.cos(obsAngle) * planetR, orbCy - Math.sin(obsAngle) * planetR, 3, 0, Math.PI * 2);
+  ctx.arc(obsX, obsY, 3, 0, Math.PI * 2);
   ctx.fill();
 
+  drawOrbitChevron(ctx, orbCx, orbCy, innerR, snapshot.primaryMoon.orbitalAngleRad + 0.35, 1, 'rgba(186, 230, 253, 0.55)');
+  if (config.blackMoon.enabled) {
+    drawOrbitChevron(
+      ctx,
+      orbCx,
+      orbCy,
+      outerR,
+      snapshot.blackMoon.orbitalAngleRad + (config.blackMoon.retrograde ? -0.25 : 0.25),
+      config.blackMoon.retrograde ? -1 : 1,
+      'rgba(248, 113, 113, 0.55)'
+    );
+  }
+
   if (config.trojanCluster.enabled) {
-    const pmAng = snapshot.primaryMoon.orbitalAngleRad;
-    const lagSign = config.trojanCluster.lagrangePoint === 'L4' ? 1 : -1;
-    const centerAng = pmAng + lagSign * config.trojanCluster.lagCenterDeg * DEG_TO_RAD;
-    const halfSpread = config.trojanCluster.arcSpreadDeg * 0.5 * DEG_TO_RAD;
-    ctx.strokeStyle = 'rgba(186, 230, 253, 0.65)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(orbCx, orbCy, innerR, -(centerAng + halfSpread), -(centerAng - halfSpread), false);
-    ctx.stroke();
-    ctx.lineWidth = 1;
+    drawOrbitalTrojanSwarm(ctx, orbCx, orbCy, innerR, snapshot, config);
   }
 
   const pmX = orbCx + Math.cos(snapshot.primaryMoon.orbitalAngleRad) * innerR;
@@ -5869,6 +5882,207 @@ function getLightBadgeBg(level: CelestialSnapshot['lighting']['level']): string 
   }
 }
 
+interface SkyToolbarState {
+  projectionMode: SkyProjectionMode;
+  focusedView: FocusedView;
+  showBodyNames: boolean;
+  showConstellations: boolean;
+  showMythicArt: boolean;
+  showArcs: boolean;
+  showGlareWashout: boolean;
+  showVolcanoGlow: boolean;
+  showQuickSelect: boolean;
+  hideFocusHud: boolean;
+  showConfigDrawer: boolean;
+  showPerfHud: boolean;
+  showHelpModal: boolean;
+  isBrowserFullscreen: boolean;
+}
+
+interface SkyToolbarActions {
+  setProjectionMode: (mode: SkyProjectionMode) => void;
+  cycleFocusedView: () => void;
+  toggleBodyNames: () => void;
+  toggleConstellations: () => void;
+  toggleMythicArt: () => void;
+  toggleArcs: () => void;
+  toggleWashout: () => void;
+  toggleVolcanoGlow: () => void;
+  toggleQuickSelect: () => void;
+  togglePureView: () => void;
+  toggleOrbits: () => void;
+  togglePerfHud: () => void;
+  openCalendar: () => void;
+  toggleHelpModal: () => void;
+  toggleBrowserFullscreen: () => void;
+}
+
+const iconToggleStyle = (active: boolean, surface: 'header' | 'overlay' = 'header'): React.CSSProperties => ({
+  minWidth: '28px',
+  height: '25px',
+  padding: '0 6px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '13px',
+  lineHeight: 1,
+  borderRadius: '5px',
+  border: active ? '1px solid #38bdf8' : surface === 'overlay' ? '1px solid rgba(51, 65, 85, 0.88)' : '1px solid #334155',
+  background: active
+    ? surface === 'overlay' ? 'rgba(2, 132, 199, 0.72)' : 'rgba(14, 116, 144, 0.45)'
+    : surface === 'overlay' ? 'rgba(15, 23, 42, 0.84)' : '#1e293b',
+  color: active ? '#f8fafc' : '#cbd5e1',
+  cursor: 'pointer',
+});
+
+const iconSegBtnStyle = (active: boolean): React.CSSProperties => ({
+  minWidth: '28px',
+  height: '25px',
+  padding: '0 7px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '13px',
+  lineHeight: 1,
+  border: 'none',
+  background: active ? '#0284c7' : '#1e293b',
+  color: '#f8fafc',
+  cursor: 'pointer',
+});
+
+function renderArcsSvgIcon(): React.ReactElement {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 12 Q8 2 14 12" stroke="currentColor" strokeWidth="1.6" strokeDasharray="2.2 2" strokeLinecap="round" />
+      <circle cx="2.5" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="13.5" cy="12" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+function renderFullscreenSvgIcon(active: boolean): React.ReactElement {
+  return active ? (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function renderViewProjectionButtons(
+  state: SkyToolbarState,
+  actions: SkyToolbarActions,
+  showProjection: boolean,
+  surface: 'header' | 'overlay'
+): React.ReactElement {
+  const groundTitle = 'Ground View — Look from eye level on the world map (drag or arrows to pan/tilt, scroll to zoom) (Key: 1)';
+  const surroundTitle = 'Surround Panorama — Wide 360° horizon view from east to west (drag or arrows to pan, scroll to zoom) (Key: 2)';
+  const cycleTitle = 'Cycle Focus View — Switch between main sky, zenith dome, orbital plane, and multi-panel layout (Key: 3)';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      {showProjection && (
+        <div style={{ display: 'flex', borderRadius: '5px', overflow: 'hidden', border: '1px solid #334155' }}>
+          <button onClick={() => actions.setProjectionMode('ground')} style={iconSegBtnStyle(state.projectionMode === 'ground')} title={groundTitle} aria-label={groundTitle}>👁️</button>
+          <button onClick={() => actions.setProjectionMode('surround')} style={iconSegBtnStyle(state.projectionMode === 'surround')} title={surroundTitle} aria-label={surroundTitle}>🏔️</button>
+        </div>
+      )}
+      <button onClick={actions.cycleFocusedView} style={iconToggleStyle(state.focusedView !== 'none', surface)} title={cycleTitle} aria-label={cycleTitle}>🪟</button>
+    </div>
+  );
+}
+
+function renderOverlayIconButtons(
+  state: SkyToolbarState,
+  actions: SkyToolbarActions,
+  surface: 'header' | 'overlay'
+): React.ReactElement {
+  const items: Array<{ key: string; icon: React.ReactNode; active: boolean; onClick: () => void; title: string }> = [
+    { key: 'names', icon: '🏷️', active: state.showBodyNames, onClick: actions.toggleBodyNames, title: 'Names & Text — Show or hide moon names, phase labels, and compass bearings (Key: 6)' },
+    { key: 'constellations', icon: '✨', active: state.showConstellations, onClick: actions.toggleConstellations, title: 'Constellation Lines — Show or hide constellation star lines and borders (Key: 7)' },
+    { key: 'art', icon: '👻', active: state.showMythicArt, onClick: actions.toggleMythicArt, title: 'Constellation Pictures — Show or hide ghostly mythic artwork over constellations (Key: 8)' },
+    { key: 'arcs', icon: renderArcsSvgIcon(), active: state.showArcs, onClick: actions.toggleArcs, title: 'Trajectory Arcs — Show or hide 24-hour solar and lunar orbital paths across the sky (Key: 9)' },
+    { key: 'washout', icon: '🔆', active: state.showGlareWashout, onClick: actions.toggleWashout, title: 'Glare Washout — Dim faint stars near bright Vaelis or Solis (Key: 0)' },
+    { key: 'volcano', icon: '🌋', active: state.showVolcanoGlow, onClick: actions.toggleVolcanoGlow, title: 'Volcanic Eruption Glow — Show or hide distant volcanic horizon glow and ash veil (Key: V)' },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      {items.map((item) => (
+        <button key={item.key} onClick={item.onClick} style={iconToggleStyle(item.active, surface)} title={item.title} aria-label={item.title}>
+          {item.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function renderToolIconButtons(
+  state: SkyToolbarState,
+  actions: SkyToolbarActions,
+  surface: 'header' | 'overlay'
+): React.ReactElement {
+  const isFocused = state.focusedView !== 'none';
+  const orbitsTitle = isFocused
+    ? 'World & Orbital Settings — Exit focus to open the customization drawer below the sky views'
+    : 'World & Orbital Settings — Customize sun/moon names, orbital periods, shard cluster, and nebula';
+  const pureTitle = 'Pure Sky View — Hide all controls, horizon line, moon rims, and cursor (Key: O; press P for mouse pan, I for pointer sphere crosshair, Esc to restore UI)';
+  const fsTitle = state.isBrowserFullscreen ? 'Exit Browser Fullscreen' : 'Enter Browser Fullscreen — Expand the sky chart to fill your screen';
+  const items: Array<{ key: string; icon: React.ReactNode; active: boolean; onClick: () => void; title: string }> = [
+    { key: 'target', icon: '🎯', active: state.showQuickSelect, onClick: actions.toggleQuickSelect, title: 'Quick Select Target — Search and point the camera at any constellation, moon, sun, or comet (Key: Y)' },
+    { key: 'pure', icon: '🕶️', active: isFocused && state.hideFocusHud, onClick: actions.togglePureView, title: pureTitle },
+    { key: 'orbits', icon: '⚙️', active: state.showConfigDrawer, onClick: actions.toggleOrbits, title: orbitsTitle },
+    { key: 'perf', icon: '📊', active: state.showPerfHud, onClick: actions.togglePerfHud, title: 'Simulation Telemetry — Show or hide FPS, frame timing, memory, and pool reuse stats' },
+    { key: 'calendar', icon: '📅', active: false, onClick: actions.openCalendar, title: 'World Calendar — Open the full Vaelora calendar in a new browser tab' },
+    { key: 'help', icon: <span style={{ fontWeight: 700, fontSize: '12px' }}>?</span>, active: state.showHelpModal, onClick: actions.toggleHelpModal, title: 'Sky Guide & Shortcuts — Open the multi-page cartography guide and shortcut reference (Key: ?)' },
+    { key: 'browserFs', icon: renderFullscreenSvgIcon(state.isBrowserFullscreen), active: state.isBrowserFullscreen, onClick: actions.toggleBrowserFullscreen, title: fsTitle },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      {items.map((item) => (
+        <button key={item.key} onClick={item.onClick} style={iconToggleStyle(item.active, surface)} title={item.title} aria-label={item.title}>
+          {item.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function renderPerfHudPanel(perfStats: PerfSnapshot, onResetSpikes: () => void, floating = false): React.ReactElement {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        flexWrap: 'wrap',
+        padding: '4px 8px',
+        borderRadius: '6px',
+        background: floating ? 'rgba(2, 6, 23, 0.9)' : '#020617',
+        border: '1px solid #1e293b',
+        fontSize: '10px',
+        fontFamily: 'monospace',
+        color: '#94a3b8',
+      }}
+    >
+      <span style={{ color: '#38bdf8', fontWeight: 700 }}>FPS: {perfStats.fps}</span>
+      <span>
+        Frame: {perfStats.avgFrameMs.toFixed(1)}ms (max{' '}
+        <strong style={{ color: perfStats.maxSpikeMs > 32 ? '#f87171' : '#cbd5e1' }}>
+          {perfStats.maxSpikeMs.toFixed(1)}ms
+        </strong>)
+      </span>
+      <span>Snap: {perfStats.lastSnapshotMs.toFixed(2)}ms | Render: {perfStats.lastRenderMs.toFixed(2)}ms | Omen: {perfStats.lastOmenScanMs.toFixed(1)}ms | Eclipse: {perfStats.lastEclipseScanMs.toFixed(1)}ms</span>
+      <span>Heap: {perfStats.heapUsedMB !== null ? `${perfStats.heapUsedMB.toFixed(1)} MB` : 'n/a'} | Alloc: {perfStats.allocKBPerSec !== null ? `${perfStats.allocKBPerSec} KB/s` : 'n/a'} | GC: {perfStats.gcCount}{perfStats.gcCount > 0 ? ` (-${perfStats.lastGcFreedMB.toFixed(2)}MB)` : ''}</span>
+      <span>Pool Reuses: <strong style={{ color: '#4ade80' }}>{perfStats.poolReuses.toLocaleString()}</strong> | Pooling: {perfStats.poolingRecommended ? 'Recommended' : 'Healthy'}</span>
+      <button onClick={onResetSpikes} style={{ padding: '1px 6px', fontSize: '10px', borderRadius: '4px', border: '1px solid #334155', background: '#0f172a', color: '#cbd5e1', cursor: 'pointer' }} title="Reset peak frame spike counter">
+        Reset Spike
+      </button>
+    </div>
+  );
+}
+
 const tabBtnStyle = (active: boolean): React.CSSProperties => ({
   padding: '4px 10px',
   fontSize: '11px',
@@ -5876,16 +6090,6 @@ const tabBtnStyle = (active: boolean): React.CSSProperties => ({
   border: 'none',
   background: active ? '#0284c7' : '#1e293b',
   color: '#f8fafc',
-  cursor: 'pointer',
-});
-
-const smallToggleStyle = (active: boolean): React.CSSProperties => ({
-  padding: '4px 9px',
-  fontSize: '11px',
-  borderRadius: '5px',
-  border: active ? '1px solid #38bdf8' : '1px solid #334155',
-  background: active ? 'rgba(14, 116, 144, 0.45)' : '#1e293b',
-  color: active ? '#f8fafc' : '#cbd5e1',
   cursor: 'pointer',
 });
 

@@ -102,7 +102,7 @@ export interface CometSkyState {
   distanceAU: number;
   activityFraction: number; // 0..1 (peaks at perihelion)
   tailLengthDeg: number;
-  tailWidthDeg: number; // 4 times the width arc of the moon (~2.24°)
+  tailWidthDeg: number; // 8 times the width arc of the moon (~4.48°)
   eclipticLonDeg: number;
   eclipticLatDeg: number;
   riseSet: RiseSetInfo;
@@ -219,7 +219,7 @@ export function getOmenLore(type: CelestialOmen['type'], config: CelestialWorldC
         name: 'The Bleeding Star (The Red Harbinger)',
         severity: 'omen',
         gmNotes: `Triggered when the 12-year periodic comet is active (visible in Year 3, Year 15, etc.) and above the horizon at night (${sun} < -2°).`,
-        gmMechanics: `Terrifying omen. While the Red Harbinger is visible in the sky with its sweeping pale red tail (4× moon width arc), divination portents are dark and NPC superstition/morale checks suffer a -2 penalty.`,
+        gmMechanics: `Terrifying omen. While the Red Harbinger is visible in the sky with its sweeping pale red tail (8× moon width arc), divination portents are dark and NPC superstition/morale checks suffer a -2 penalty.`,
         playerDescription: `A pale red star bleeding a sweeping crimson tail hangs like an executioner’s blade across the heavens — an ancient omen of upheaval, war, and fallen kings.`,
       };
   }
@@ -346,8 +346,8 @@ export const DEFAULT_CELESTIAL_CONFIG: CelestialWorldConfig = {
     perihelionDistanceAU: 0.52,
     color: '#f87171',
     tailColor: 'rgba(239, 68, 68, 0.42)',
-    tailLengthDeg: 24,
-    tailWidthMultiplier: 4, // 4 times the width arc of the primary moon
+    tailLengthDeg: 36,
+    tailWidthMultiplier: 8, // 8 times the width arc of the primary moon (~4.48°)
   },
 };
 
@@ -494,11 +494,19 @@ interface Vec3 {
   z: number;
 }
 
-// Reusable scratch vectors to eliminate per-shard / per-step Vec3 GC allocations
-const _scratchEcl: Vec3 = { x: 0, y: 0, z: 0 };
+// Reusable scratch vectors to eliminate per-shard / per-step Vec3 GC allocations without aliasing
 const _pmEcl: Vec3 = { x: 0, y: 0, z: 0 };
+const _tcCoreEcl: Vec3 = { x: 0, y: 0, z: 0 };
+const _shardEcl: Vec3 = { x: 0, y: 0, z: 0 };
 const _bmEcl: Vec3 = { x: 0, y: 0, z: 0 };
-const _scratchEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _sunEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _pmEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _tcCoreEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _shardEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _bmEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _cometEq: Vec3 = { x: 0, y: 0, z: 0 };
+const _riseSetEcl: Vec3 = { x: 0, y: 0, z: 0 };
+const _riseSetEq: Vec3 = { x: 0, y: 0, z: 0 };
 
 function orbitalToEclipticVecInto(argOfLatRad: number, incRad: number, nodeRad: number, out: Vec3): Vec3 {
   const cu = Math.cos(argOfLatRad);
@@ -515,8 +523,39 @@ function orbitalToEclipticVecInto(argOfLatRad: number, incRad: number, nodeRad: 
   return out;
 }
 
-function orbitalToEclipticVec(argOfLatRad: number, incRad: number, nodeRad: number): Vec3 {
-  return orbitalToEclipticVecInto(argOfLatRad, incRad, nodeRad, _scratchEcl);
+/**
+ * Computes ecliptic unit vector for a body offset perpendicularly by `latOffsetRad` from an inclined orbit.
+ * Prevents 3D shard scatter from collapsing to zero thickness at the ascending/descending orbital nodes.
+ */
+function orbitalWithLatOffsetToEclipticVecInto(
+  argOfLatRad: number,
+  latOffsetRad: number,
+  incRad: number,
+  nodeRad: number,
+  out: Vec3
+): Vec3 {
+  const cu = Math.cos(argOfLatRad);
+  const su = Math.sin(argOfLatRad);
+  const ci = Math.cos(incRad);
+  const si = Math.sin(incRad);
+  const cO = Math.cos(nodeRad);
+  const sO = Math.sin(nodeRad);
+  const cb = Math.cos(latOffsetRad);
+  const sb = Math.sin(latOffsetRad);
+
+  const rx = cO * cu - sO * su * ci;
+  const ry = sO * cu + cO * su * ci;
+  const rz = su * si;
+
+  const nx = sO * si;
+  const ny = -cO * si;
+  const nz = ci;
+
+  out.x = cb * rx + sb * nx;
+  out.y = cb * ry + sb * ny;
+  out.z = cb * rz + sb * nz;
+  skyPerfMonitor.recordPoolReuse(1);
+  return out;
 }
 
 function eclipticToEquatorialVecInto(ecl: Vec3, tiltRad: number, out: Vec3): Vec3 {
@@ -527,10 +566,6 @@ function eclipticToEquatorialVecInto(ecl: Vec3, tiltRad: number, out: Vec3): Vec
   out.z = ecl.y * se + ecl.z * ce;
   skyPerfMonitor.recordPoolReuse(1);
   return out;
-}
-
-function eclipticToEquatorialVec(ecl: Vec3, tiltRad: number): Vec3 {
-  return eclipticToEquatorialVecInto(ecl, tiltRad, _scratchEq);
 }
 
 function equatorialToHorizontal(eq: Vec3, lstRad: number, latRad: number): SkyVectorHorizontal {
@@ -555,6 +590,68 @@ function equatorialToHorizontal(eq: Vec3, lstRad: number, latRad: number): SkyVe
     altitudeDeg,
     azimuthDeg,
     aboveHorizon: altitudeDeg > -0.25,
+  };
+}
+
+/**
+ * Maps a catalog star magnitude (`0.04` brightest .. `0.74` faintest) onto pinpoint luminance.
+ * Keeps only 1st-magnitude stars near full intensity while mid and catalog stars drop smoothly to dim/faint.
+ */
+export function computeStarPinpointLuminance(mag: number): number {
+  const t = clamp((0.76 - mag) / 0.72, 0, 1);
+  return 0.06 + 0.89 * Math.pow(t, 2.8);
+}
+
+/**
+ * Computes continuous comet sky visibility across daytime, dawn/sunset twilight, and full night.
+ * Faintly visible even in daylight, brightening smoothly through sunset and dimming smoothly after sunrise.
+ */
+export function computeCometSkyVisibility(
+  sunAltDeg: number,
+  eclipseFraction = 0,
+  overheadVeil = 0,
+  showGlareWashout = true
+): number {
+  const effectiveSunAlt = sunAltDeg - clamp(eclipseFraction, 0, 1) * 18;
+  let baseVis: number;
+  if (effectiveSunAlt <= -12) {
+    baseVis = 1.0;
+  } else if (effectiveSunAlt <= 6) {
+    const t = (effectiveSunAlt + 12) / 18;
+    const s = t * t * (3 - 2 * t);
+    baseVis = 1.0 - s * 0.78;
+  } else {
+    const d = clamp((effectiveSunAlt - 6) / 44, 0, 1);
+    baseVis = 0.22 - d * 0.08;
+  }
+  const washoutAdjusted = showGlareWashout ? baseVis : Math.max(0.55, baseVis);
+  return clamp(washoutAdjusted * (1 - clamp(overheadVeil, 0, 1) * 0.75), 0, 1);
+}
+
+/**
+ * Computes deterministic atmospheric star scintillation (twinkling) factors.
+ * Stronger near the horizon where airmass is higher, and active only when `twinkleStrength > 0`.
+ * Stars remain strict 1x1 pixel pinpoints (`radiusMul: 1`), modulating only brightness when twinkling.
+ */
+export function computeStarTwinkleFactor(
+  raRad: number,
+  decRad: number,
+  altitudeDeg: number,
+  timeSec: number,
+  twinkleStrength: number
+): { alphaMul: number; radiusMul: number } {
+  if (twinkleStrength <= 0.001) return { alphaMul: 1, radiusMul: 1 };
+  const seedA = raRad * 73.13 + decRad * 31.7;
+  const seedB = raRad * 19.41 - decRad * 53.9;
+  const sinAlt = Math.max(0.08, Math.sin(clamp(altitudeDeg, 2, 90) * DEG_TO_RAD));
+  const airmass = clamp(0.2 + 0.8 * Math.pow(0.14 / sinAlt, 0.55), 0.25, 1.0);
+  const freq1 = 2.6 + Math.abs(Math.sin(seedA)) * 2.4;
+  const freq2 = 4.3 + Math.abs(Math.cos(seedB)) * 3.1;
+  const wave = 0.62 * Math.sin(timeSec * freq1 + seedA * 10) + 0.38 * Math.sin(timeSec * freq2 + seedB * 17);
+  const amp = 0.36 * clamp(twinkleStrength, 0, 1) * airmass;
+  return {
+    alphaMul: clamp(1 - amp * 0.25 + amp * wave, 0.38, 1.25),
+    radiusMul: 1,
   };
 }
 
@@ -620,16 +717,17 @@ interface ShardTemplate {
 function getDeterministicShards(count: number, arcSpreadDeg: number, incScatterDeg: number): ShardTemplate[] {
   const list: ShardTemplate[] = [];
   for (let i = 0; i < count; i++) {
-    // Halton / golden-ratio quasi-random sequence for natural clustered Trojan L5 tadpole distribution
+    // 4D low-discrepancy quasi-random sequence so longitudinal and perpendicular scatter stay decorrelated
     const u1 = ((i * 0.61803398875 + 0.17) % 1 + 1) % 1;
     const u2 = ((i * 0.75487766625 + 0.43) % 1 + 1) % 1;
     const u3 = ((i * 0.56984029099 + 0.81) % 1 + 1) % 1;
+    const u4 = ((i * 0.8191725133961644 + 0.37) % 1 + 1) % 1;
 
-    // Tadpole asymmetry: denser core slightly ahead of L5, longer wispy tail behind
+    // Tadpole asymmetry: denser core toward L4/L5 head, longer wispy tail trailing behind
     const signed = u1 < 0.55 ? -(u1 / 0.55) * 0.42 : ((u1 - 0.55) / 0.45) * 0.58;
     const radialWeight = Math.pow(u2, 0.7);
     const lagOffsetDeg = signed * arcSpreadDeg * (0.35 + 0.65 * radialWeight);
-    const latScatterDeg = (u2 * 2 - 1) * incScatterDeg * (1 - Math.abs(signed) * 0.45);
+    const latScatterDeg = (u4 * 2 - 1) * incScatterDeg * (1 - Math.abs(signed) * 0.45);
     const relativeSize = i < 5 ? 0.8 + 0.2 * u3 : 0.28 + 0.52 * Math.pow(u3, 1.6);
     const reflectivity = 0.55 + 0.45 * (1 - Math.abs(signed));
 
@@ -765,7 +863,7 @@ function computeBodyAltitudeAtHour(
     const lagSign = config.trojanCluster.lagrangePoint === 'L4' ? 1 : -1;
     const lagOffsetRad = body === 'trojan' ? lagSign * config.trojanCluster.lagCenterDeg * DEG_TO_RAD : 0;
     const argLat = sunLonRad + meanElong + lagOffsetRad - nodeRad;
-    ecl = orbitalToEclipticVec(argLat, incRad, nodeRad);
+    ecl = orbitalToEclipticVecInto(argLat, incRad, nodeRad, _riseSetEcl);
   } else if (body === 'comet') {
     ecl = computeCometEcliptic(utDays, config);
   } else {
@@ -774,10 +872,10 @@ function computeBodyAltitudeAtHour(
     const incRad = bm.inclinationDeg * DEG_TO_RAD;
     const dir = bm.retrograde ? -1 : 1;
     const lon = bm.initialLongitudeDeg * DEG_TO_RAD + dir * (utDays / bm.siderealPeriodDays) * TWO_PI;
-    ecl = orbitalToEclipticVec(lon - nodeRad, incRad, nodeRad);
+    ecl = orbitalToEclipticVecInto(lon - nodeRad, incRad, nodeRad, _riseSetEcl);
   }
 
-  const eq = eclipticToEquatorialVec(ecl, tiltRad);
+  const eq = eclipticToEquatorialVecInto(ecl, tiltRad, _riseSetEq);
   return equatorialToHorizontal(eq, lstRad, latRad).altitudeDeg;
 }
 
@@ -897,7 +995,7 @@ export function computeCelestialSnapshot(
   const sunLonRad = wrapRad(((utDays - eqOffset) / daysPerYear) * TWO_PI);
   const lstRad = wrapRad(sunLonRad + ((localHour - hoursPerDay * 0.5) / hoursPerDay) * TWO_PI);
   const sunEcl: Vec3 = { x: Math.cos(sunLonRad), y: Math.sin(sunLonRad), z: 0 };
-  const sunEq = eclipticToEquatorialVec(sunEcl, tiltRad);
+  const sunEq = eclipticToEquatorialVecInto(sunEcl, tiltRad, _sunEq);
   const sunSky = equatorialToHorizontal(sunEq, lstRad, latRad);
   const sunAngularRadiusDeg = 0.265;
 
@@ -909,7 +1007,7 @@ export function computeCelestialSnapshot(
   const pmOrbitalLonRad = wrapRad(sunLonRad + pmMeanElongRad);
   const pmArgLatRad = pmOrbitalLonRad - pmNodeRad;
   const pmEcl = orbitalToEclipticVecInto(pmArgLatRad, pmIncRad, pmNodeRad, _pmEcl);
-  const pmEq = eclipticToEquatorialVec(pmEcl, tiltRad);
+  const pmEq = eclipticToEquatorialVecInto(pmEcl, tiltRad, _pmEq);
   const pmSky = equatorialToHorizontal(pmEq, lstRad, latRad);
 
   const pmDotSun = clamp(pmEcl.x * sunEcl.x + pmEcl.y * sunEcl.y + pmEcl.z * sunEcl.z, -1, 1);
@@ -923,8 +1021,8 @@ export function computeCelestialSnapshot(
   const lagSign = tc.lagrangePoint === 'L4' ? 1 : -1;
   const tcLagRad = tc.lagCenterDeg * DEG_TO_RAD;
   const tcCoreOrbitalRad = wrapRad(pmOrbitalLonRad + lagSign * tcLagRad);
-  const tcCoreEcl = orbitalToEclipticVec(tcCoreOrbitalRad - pmNodeRad, pmIncRad, pmNodeRad);
-  const tcCoreEq = eclipticToEquatorialVec(tcCoreEcl, tiltRad);
+  const tcCoreEcl = orbitalToEclipticVecInto(tcCoreOrbitalRad - pmNodeRad, pmIncRad, pmNodeRad, _tcCoreEcl);
+  const tcCoreEq = eclipticToEquatorialVecInto(tcCoreEcl, tiltRad, _tcCoreEq);
   const tcCoreSky = equatorialToHorizontal(tcCoreEq, lstRad, latRad);
   const tcDotSun = clamp(tcCoreEcl.x * sunEcl.x + tcCoreEcl.y * sunEcl.y + tcCoreEcl.z * sunEcl.z, -1, 1);
   const tcPhaseFraction = (1 - tcDotSun) * 0.5;
@@ -935,9 +1033,9 @@ export function computeCelestialSnapshot(
     const templates = getDeterministicShards(tc.shardCount, tc.arcSpreadDeg, tc.inclinationScatterDeg);
     for (const tpl of templates) {
       const sArgLat = pmOrbitalLonRad + lagSign * (tc.lagCenterDeg + tpl.lagOffsetDeg) * DEG_TO_RAD - pmNodeRad;
-      const sInc = (pm.inclinationDeg + tpl.latScatterDeg) * DEG_TO_RAD;
-      const sEcl = orbitalToEclipticVec(sArgLat, sInc, pmNodeRad);
-      const sEq = eclipticToEquatorialVec(sEcl, tiltRad);
+      const sLatOffsetRad = tpl.latScatterDeg * DEG_TO_RAD;
+      const sEcl = orbitalWithLatOffsetToEclipticVecInto(sArgLat, sLatOffsetRad, pmIncRad, pmNodeRad, _shardEcl);
+      const sEq = eclipticToEquatorialVecInto(sEcl, tiltRad, _shardEq);
       const sSky = equatorialToHorizontal(sEq, lstRad, latRad);
       const sDotSun = clamp(sEcl.x * sunEcl.x + sEcl.y * sunEcl.y + sEcl.z * sunEcl.z, -1, 1);
       const sPhase = (1 - sDotSun) * 0.5;
@@ -961,7 +1059,7 @@ export function computeCelestialSnapshot(
     bm.initialLongitudeDeg * DEG_TO_RAD + bmDir * (utDays / bm.siderealPeriodDays) * TWO_PI
   );
   const bmEcl = orbitalToEclipticVecInto(bmOrbitalLonRad - bmNodeRad, bmIncRad, bmNodeRad, _bmEcl);
-  const bmEq = eclipticToEquatorialVec(bmEcl, tiltRad);
+  const bmEq = eclipticToEquatorialVecInto(bmEcl, tiltRad, _bmEq);
   const bmSky = equatorialToHorizontal(bmEq, lstRad, latRad);
 
   // 4b. 12-Year Periodic Comet ("The Red Harbinger")
@@ -977,9 +1075,9 @@ export function computeCelestialSnapshot(
     : 0;
 
   const cometEcl = computeCometEcliptic(utDays, config);
-  const cometEq = eclipticToEquatorialVec(cometEcl, tiltRad);
+  const cometEq = eclipticToEquatorialVecInto(cometEcl, tiltRad, _cometEq);
   const cometSky = equatorialToHorizontal(cometEq, lstRad, latRad);
-  const cometTailWidthDeg = cometCfg.tailWidthMultiplier * (pm.angularRadiusDeg * 2); // 4 * 0.56° = 2.24°
+  const cometTailWidthDeg = cometCfg.tailWidthMultiplier * (pm.angularRadiusDeg * 2); // 8 * 0.56° = 4.48°
   const cometTailLengthDeg = cometCfg.tailLengthDeg * (0.35 + 0.65 * cometActivityFraction);
 
   const bmDotSun = clamp(bmEcl.x * sunEcl.x + bmEcl.y * sunEcl.y + bmEcl.z * sunEcl.z, -1, 1);
@@ -1043,7 +1141,7 @@ export function computeCelestialSnapshot(
     name: cometCfg.name,
     active: cometActive,
     sky: cometSky,
-    distanceAU: 0.52 + 4.72 * (1 - cometActivityFraction),
+    distanceAU: 0.26 + 4.72 * (1 - cometActivityFraction),
     activityFraction: cometActivityFraction,
     tailLengthDeg: cometTailLengthDeg,
     tailWidthDeg: cometTailWidthDeg,

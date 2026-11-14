@@ -11,6 +11,7 @@ export interface QWorldSkyMistTextureSet {
   galaxyPatchLavender: HTMLCanvasElement;
   galaxyDarkRift: HTMLCanvasElement;
   chrysalisNebula: HTMLCanvasElement;
+  cometTailMist: HTMLCanvasElement;
 }
 
 type MistPixelSampler = (u: number, v: number) => [number, number, number, number];
@@ -49,10 +50,10 @@ export function computeGalaxySpinePixel(u: number, v: number): [number, number, 
   const wV = cosV * cosV;
 
   const v2 = v * v;
-  const gOuter = 0.18 * Math.exp(-v2 / (2 * 0.50 * 0.50));
-  const gMid = 0.26 * Math.exp(-v2 / (2 * 0.28 * 0.28));
-  const gInner = 0.34 * Math.exp(-v2 / (2 * 0.15 * 0.15));
-  const gCore = 0.22 * Math.exp(-v2 / (2 * 0.07 * 0.07));
+  const gOuter = 0.24 * Math.exp(-v2 / (2 * 0.50 * 0.50));
+  const gMid = 0.30 * Math.exp(-v2 / (2 * 0.28 * 0.28));
+  const gInner = 0.32 * Math.exp(-v2 / (2 * 0.15 * 0.15));
+  const gCore = 0.14 * Math.exp(-v2 / (2 * 0.07 * 0.07));
   const sumG = gOuter + gMid + gInner + gCore;
   if (sumG <= 1e-6) return [165, 205, 245, 0];
 
@@ -149,6 +150,53 @@ export function computeNebulaMistPixel(u: number, v: number): [number, number, n
   return [red, green, blue, clamp01(sumG * window)];
 }
 
+/**
+ * Evaluates soft, smoothly fading comet tail mist RGBA in unit coordinates `[-1, 1]`.
+ * Head sits near `u = -0.80, v = 0`; the straight ion mist plume and curved dust mist fan
+ * expand gently rightward while tapering continuously to zero before texture boundaries.
+ */
+export function computeCometTailMistPixel(u: number, v: number): [number, number, number, number] {
+  const absU = Math.abs(u);
+  const absV = Math.abs(v);
+  if (absU >= 1 || absV >= 1) return [248, 113, 113, 0];
+
+  const uHead = -0.80;
+  const s = u >= uHead ? (u - uHead) / (1 - uHead) : 0;
+  const cosS = Math.cos(s * Math.PI * 0.5);
+  const wLong = cosS * cosS;
+
+  let forwardShoulder = 1;
+  if (u < uHead) {
+    const sBack = (uHead - u) / (1 + uHead);
+    const cosBack = Math.cos(sBack * Math.PI * 0.5);
+    forwardShoulder = Math.exp(-(sBack * sBack) / (2 * 0.28 * 0.28)) * cosBack * cosBack;
+  }
+
+  const cosV = Math.cos(absV * Math.PI * 0.5);
+  const wV = cosV * cosV;
+
+  // 1. Straight Ion Mist Plume along antisolar spine (v = 0)
+  const sigmaIon = 0.048 + 0.13 * s;
+  const ionProfile = Math.exp(-(v * v) / (2 * sigmaIon * sigmaIon));
+  const ionDensity = 0.45 * ionProfile * Math.pow(1 - s, 1.65) * wLong;
+
+  // 2. Broad Gently Curved Dust Mist Fan
+  const vCurve = 0.20 * Math.pow(s, 1.4);
+  const sigmaDust = 0.075 + 0.34 * Math.pow(s, 0.85);
+  const dv = v - vCurve;
+  const dustProfile = Math.exp(-(dv * dv) / (2 * sigmaDust * sigmaDust));
+  const dustDensity = 0.35 * dustProfile * Math.pow(1 - s, 1.35) * wLong;
+
+  const combined = (ionDensity + dustDensity) * forwardShoulder * wV;
+  if (combined <= 1e-6) return [248, 113, 113, 0];
+
+  const sumW = ionDensity + dustDensity;
+  const red = (ionDensity * (254 - 10 * s) + dustDensity * (244 - 28 * s)) / sumW;
+  const green = (ionDensity * (206 - 90 * s) + dustDensity * (98 - 60 * s)) / sumW;
+  const blue = (ionDensity * (206 - 90 * s) + dustDensity * (108 - 70 * s)) / sumW;
+  return [red, green, blue, clamp01(combined)];
+}
+
 function buildMistCanvas(width: number, height: number, sampler: MistPixelSampler): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -203,6 +251,7 @@ export function getQWorldSkyMistTextures(): QWorldSkyMistTextureSet {
     galaxyPatchLavender: buildMistCanvas(160, 160, (u, v) => computeGalaxyPatchPixel(u, v, true)),
     galaxyDarkRift: buildMistCanvas(256, 160, computeDarkRiftPixel),
     chrysalisNebula: buildMistCanvas(320, 320, computeNebulaMistPixel),
+    cometTailMist: buildMistCanvas(320, 160, computeCometTailMistPixel),
   };
 
   return cachedMistTextures;
