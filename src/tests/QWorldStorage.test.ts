@@ -41,4 +41,31 @@ describe('QWorldStorage', () => {
     expect(restored.vectorTree.getMarkerCount()).toBe(2_000);
     expect(importDuration).toBeLessThan(50);
   });
+
+  it('preserves locked markers and full-planet coordinates across JSON serialization', () => {
+    const chunkTree = new QWorldChunkTree();
+    const vectorTree = new QWorldVectorTree({ minX: 0, maxX: 12_754_584, minZ: 0, maxZ: 6_377_292 });
+    vectorTree.addMarker({
+      id: 'm-planet',
+      name: 'Highwatch',
+      category: 'city',
+      x: 6_400_000,
+      y: 185,
+      z: 3_200_000,
+      minLod: 0,
+      maxLod: 9,
+      locked: true,
+    });
+
+    const json = QWorldStorage.serializeToJson(chunkTree, vectorTree, 'Planet');
+    const restored = QWorldStorage.deserializeFromJson(json);
+    const visible = restored.vectorTree.queryVisible(
+      { minX: 6_300_000, maxX: 6_500_000, minZ: 3_100_000, maxZ: 3_300_000 },
+      0
+    );
+
+    expect(visible.markers).toHaveLength(1);
+    expect(visible.markers[0].locked).toBe(true);
+    expect(visible.markers[0].y).toBe(185);
+  });
 });

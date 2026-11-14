@@ -1,4 +1,4 @@
-import { WorldBounds } from './QWorldChunkTree';
+import { WorldBounds, WORLD_SPAN_X } from './QWorldChunkTree';
 
 export interface WorldPoint2D {
   x: number;
@@ -10,17 +10,62 @@ export interface WorldMarker {
   name: string;
   category: string;
   x: number;
+  y?: number;
   z: number;
   minLod: number;
   maxLod: number;
+  notes?: string;
+  zoomDistance?: number;
+  locked?: boolean;
+  eruptionActive?: boolean;
+  eruptionMagnitude?: number;
 }
 
 export interface WorldPolyline {
   id: string;
-  type: 'river' | 'road';
+  type: 'river' | 'road' | 'fault';
+  faultKind?: 'mountain' | 'depression';
   points: WorldPoint2D[];
   sourceVolume?: number;
   name?: string;
+}
+
+export type RouteState = 'path' | 'road' | 'building' | 'built_road';
+
+export interface TravelTimeEstimate {
+  walkingHours: number;
+  ridingHours: number;
+  vehiclesHours: number;
+}
+
+export interface RouteStop {
+  markerId?: string;
+  label: string;
+  x: number;
+  z: number;
+}
+
+export interface RouteLegMetrics {
+  fromLabel: string;
+  toLabel: string;
+  points: WorldPoint2D[];
+  lengthYards: number;
+  elevationGainYards: number;
+  travelHours: TravelTimeEstimate;
+}
+
+export interface WorldRoute {
+  id: string;
+  name?: string;
+  fromMarkerId: string;
+  toMarkerId: string;
+  stops?: RouteStop[];
+  legs?: RouteLegMetrics[];
+  travelHours?: TravelTimeEstimate;
+  state: RouteState;
+  points: WorldPoint2D[];
+  lengthYards: number;
+  elevationGainYards?: number;
 }
 
 interface SpatialEntry<T> {
@@ -98,15 +143,44 @@ function intersects(a: WorldBounds, b: WorldBounds): boolean {
   return a.minX <= b.maxX && a.maxX >= b.minX && a.minZ <= b.maxZ && a.maxZ >= b.minZ;
 }
 
+function computePointsBounds(points: WorldPoint2D[]): WorldBounds | null {
+  if (points.length === 0) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let crossesSeam = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+    if (i > 0 && Math.abs(p.x - points[i - 1].x) > WORLD_SPAN_X * 0.5) {
+      crossesSeam = true;
+    }
+  }
+  if (crossesSeam) {
+    minX = 0;
+    maxX = WORLD_SPAN_X;
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
 export class QWorldVectorTree {
-  private readonly markerRoot: QuadTreeNode<WorldMarker>;
+  private readonly worldBounds: WorldBounds;
+  private markerRoot: QuadTreeNode<WorldMarker>;
   private readonly polylineRoot: QuadTreeNode<WorldPolyline>;
+  private routeRoot: QuadTreeNode<WorldRoute>;
   private readonly markers = new Map<string, WorldMarker>();
   private readonly polylines = new Map<string, WorldPolyline>();
+  private readonly routes = new Map<string, WorldRoute>();
 
   constructor(worldBounds: WorldBounds) {
+    this.worldBounds = worldBounds;
     this.markerRoot = new QuadTreeNode<WorldMarker>(worldBounds, 0);
     this.polylineRoot = new QuadTreeNode<WorldPolyline>(worldBounds, 0);
+    this.routeRoot = new QuadTreeNode<WorldRoute>(worldBounds, 0);
   }
 
   public addMarker(marker: WorldMarker): void {
@@ -118,20 +192,93 @@ export class QWorldVectorTree {
     );
   }
 
+  public getMarker(id: string): WorldMarker | undefined {
+    return this.markers.get(id);
+  }
+
+  public updateMarker(id: string, patch: Partial<WorldMarker>): WorldMarker | undefined {
+    const existing = this.markers.get(id);
+    if (!existing) return undefined;
+    const posChanged =
+      (patch.x !== undefined && patch.x !== existing.x) ||
+      (patch.z !== undefined && patch.z !== existing.z);
+    Object.assign(existing, patch);
+    if (posChanged) {
+      this.rebuildMarkerIndex();
+    }
+    return existing;
+  }
+
+  public removeMarker(id: string): boolean {
+    if (!this.markers.delete(id)) return false;
+    this.rebuildMarkerIndex();
+    return true;
+  }
+
+  private rebuildMarkerIndex(): void {
+    this.markerRoot = new QuadTreeNode<WorldMarker>(this.worldBounds, 0);
+    for (const m of this.markers.values()) {
+      this.markerRoot.insert(
+        { bounds: { minX: m.x, maxX: m.x, minZ: m.z, maxZ: m.z }, item: m },
+        16,
+        8
+      );
+    }
+  }
+
   public addPolyline(poly: WorldPolyline): void {
     this.polylines.set(poly.id, poly);
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const p of poly.points) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.z < minZ) minZ = p.z;
-      if (p.z > maxZ) maxZ = p.z;
+    const bounds = computePointsBounds(poly.points);
+    if (bounds) {
+      this.polylineRoot.insert({ bounds, item: poly }, 16, 8);
     }
-    this.polylineRoot.insert({ bounds: { minX, maxX, minZ, maxZ }, item: poly }, 16, 8);
+  }
+
+  public addRoute(route: WorldRoute): void {
+    this.routes.set(route.id, route);
+    const bounds = computePointsBounds(route.points);
+    if (bounds) {
+      this.routeRoot.insert({ bounds, item: route }, 16, 8);
+    }
+  }
+
+  public getRoute(id: string): WorldRoute | undefined {
+    return this.routes.get(id);
+  }
+
+  public updateRoute(id: string, patch: Partial<WorldRoute>): WorldRoute | undefined {
+    const existing = this.routes.get(id);
+    if (!existing) return undefined;
+    const pointsChanged = patch.points !== undefined;
+    Object.assign(existing, patch);
+    if (pointsChanged) {
+      this.rebuildRouteIndex();
+    }
+    return existing;
+  }
+
+  public removeRoute(id: string): boolean {
+    if (!this.routes.delete(id)) return false;
+    this.rebuildRouteIndex();
+    return true;
+  }
+
+  private rebuildRouteIndex(): void {
+    this.routeRoot = new QuadTreeNode<WorldRoute>(this.worldBounds, 0);
+    for (const r of this.routes.values()) {
+      const bounds = computePointsBounds(r.points);
+      if (bounds) {
+        this.routeRoot.insert({ bounds, item: r }, 16, 8);
+      }
+    }
   }
 
   public getMarkerCount(): number {
     return this.markers.size;
+  }
+
+  public getRouteCount(): number {
+    return this.routes.size;
   }
 
   public getAllMarkers(): WorldMarker[] {
@@ -142,14 +289,23 @@ export class QWorldVectorTree {
     return Array.from(this.polylines.values());
   }
 
-  public queryVisible(bounds: WorldBounds, lod: number): { markers: WorldMarker[]; polylines: WorldPolyline[] } {
+  public getAllRoutes(): WorldRoute[] {
+    return Array.from(this.routes.values());
+  }
+
+  public queryVisible(
+    bounds: WorldBounds,
+    lod: number
+  ): { markers: WorldMarker[]; polylines: WorldPolyline[]; routes: WorldRoute[] } {
     const rawMarkers: WorldMarker[] = [];
     const rawPolylines: WorldPolyline[] = [];
+    const rawRoutes: WorldRoute[] = [];
     this.markerRoot.query(bounds, new Set<WorldMarker>(), rawMarkers);
     this.polylineRoot.query(bounds, new Set<WorldPolyline>(), rawPolylines);
+    this.routeRoot.query(bounds, new Set<WorldRoute>(), rawRoutes);
 
     const markers = rawMarkers.filter((m) => lod >= m.minLod && lod <= m.maxLod);
-    return { markers, polylines: rawPolylines };
+    return { markers, polylines: rawPolylines, routes: rawRoutes };
   }
 
   public recalculateRiverFlows(snapThreshold: number = 10): Map<string, number> {

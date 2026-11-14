@@ -1,5 +1,31 @@
-export type EditorToolMode = 'select' | 'elevate' | 'biome' | 'river' | 'road' | 'marker';
+export type EditorToolMode =
+  | 'select'
+  | 'elevate'
+  | 'biome'
+  | 'polygon'
+  | 'river'
+  | 'road'
+  | 'marker'
+  | 'weather'
+  | 'generate'
+  | 'help';
 export type CameraPresetMode = '3d' | 'topdown' | 'people';
+
+export interface WeatherLayerToggles {
+  showHighWind: boolean;
+  showSurfaceWind: boolean;
+  showStormRisk: boolean;
+  showFalloutOverlay: boolean;
+  renderAshInWorld: boolean;
+}
+
+export const DEFAULT_WEATHER_LAYERS: WeatherLayerToggles = {
+  showHighWind: false,
+  showSurfaceWind: false,
+  showStormRisk: false,
+  showFalloutOverlay: false,
+  renderAshInWorld: true,
+};
 
 export interface BiomePreset {
   id: number;
@@ -31,10 +57,14 @@ export interface MarkerPreset {
 export const MARKER_PRESETS: MarkerPreset[] = [
   { category: 'city', label: 'City', icon: '🏰', color: '#f59e0b', minLod: 0, maxLod: 9 },
   { category: 'town', label: 'Town', icon: '🏘️', color: '#eab308', minLod: 1, maxLod: 9 },
+  { category: 'village', label: 'Village', icon: '🏡', color: '#a3e635', minLod: 2, maxLod: 9 },
+  { category: 'crossroads', label: 'Cross-Roads', icon: '🪧', color: '#cbd5e1', minLod: 1, maxLod: 9 },
+  { category: 'inn', label: 'Inn', icon: '🍺', color: '#fb923c', minLod: 2, maxLod: 9 },
   { category: 'fort', label: 'Fort', icon: '🛡️', color: '#94a3b8', minLod: 1, maxLod: 9 },
   { category: 'mine', label: 'Mine', icon: '⛏️', color: '#a8a29e', minLod: 3, maxLod: 9 },
   { category: 'farm', label: 'Farm', icon: '🌾', color: '#84cc16', minLod: 3, maxLod: 9 },
   { category: 'dungeon', label: 'Dungeon', icon: '💀', color: '#ef4444', minLod: 3, maxLod: 9 },
+  { category: 'volcano', label: 'Volcano', icon: '🌋', color: '#f97316', minLod: 0, maxLod: 9 },
   { category: 'building', label: 'Building', icon: '🏠', color: '#38bdf8', minLod: 7, maxLod: 9 },
 ];
 

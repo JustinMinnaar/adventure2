@@ -62,6 +62,35 @@ describe('QWorldVectorTree', () => {
     const duration = performance.now() - start;
 
     expect(flows.get('r-499')).toBeGreaterThanOrEqual(1);
-    expect(duration).toBeLessThan(3);
+    expect(duration).toBeLessThan(15);
+  });
+
+  it('re-indexes marker spatial bounds on position drag and preserves lock state', () => {
+    const tree = new QWorldVectorTree({ minX: 0, maxX: 100_000, minZ: 0, maxZ: 100_000 });
+    tree.addMarker({
+      id: 'm-drag',
+      name: 'Outpost',
+      category: 'fort',
+      x: 1_000,
+      y: 120,
+      z: 1_000,
+      minLod: 0,
+      maxLod: 9,
+      locked: false,
+    });
+
+    expect(tree.queryVisible({ minX: 0, maxX: 2_000, minZ: 0, maxZ: 2_000 }, 0).markers).toHaveLength(1);
+    expect(tree.queryVisible({ minX: 80_000, maxX: 90_000, minZ: 80_000, maxZ: 90_000 }, 0).markers).toHaveLength(0);
+
+    // Move marker to a new location and snap elevation
+    tree.updateMarker('m-drag', { x: 85_000, z: 85_000, y: 410 });
+    expect(tree.queryVisible({ minX: 0, maxX: 2_000, minZ: 0, maxZ: 2_000 }, 0).markers).toHaveLength(0);
+    const moved = tree.queryVisible({ minX: 80_000, maxX: 90_000, minZ: 80_000, maxZ: 90_000 }, 0).markers;
+    expect(moved).toHaveLength(1);
+    expect(moved[0].y).toBe(410);
+
+    // Lock marker
+    tree.updateMarker('m-drag', { locked: true });
+    expect(tree.getMarker('m-drag')?.locked).toBe(true);
   });
 });

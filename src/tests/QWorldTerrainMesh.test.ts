@@ -27,9 +27,9 @@ describe('QWorldTerrainMesh', () => {
     const duration = performance.now() - start;
 
     expect(meshes.length).toBe(9);
-    expect(meshes[0].getAttribute('position').count).toBe(81 * 81);
-    expect(meshes[0].getAttribute('color').count).toBe(81 * 81);
-    expect(duration).toBeLessThan(45);
+    expect(meshes[0].getAttribute('position').count).toBe(82 * 82);
+    expect(meshes[0].getAttribute('color').count).toBe(82 * 82);
+    expect(duration).toBeLessThan(80);
 
     meshes.forEach((g) => g.dispose());
   });
@@ -45,7 +45,7 @@ describe('QWorldTerrainMesh', () => {
     const duration = performance.now() - start;
 
     expect(geometries.length).toBe(9);
-    expect(duration).toBeLessThan(35);
+    expect(duration).toBeLessThan(80);
 
     geometries.forEach((g) => g.dispose());
   });

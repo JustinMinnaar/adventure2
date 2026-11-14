@@ -83,4 +83,29 @@ describe('QWorldWaterFlood', () => {
     expect(floodedCount).toBe(164_025);
     expect(duration).toBeLessThan(35);
   });
+
+  it('floods a depressed channel connected to an existing shoreline in distant L2 chunks', () => {
+    const tree = new QWorldChunkTree();
+    const flood = new QWorldWaterFlood(tree, 0);
+    const lod = 2;
+    const chunk = tree.getOrCreateChunk(lod, 7, 6);
+    chunk.heights.fill(200);
+    chunk.waterFlags.fill(0);
+
+    // Existing ocean along x = 40..80, z = 20
+    for (let x = 40; x < CHUNK_SIZE; x++) {
+      chunk.heights[20 * CHUNK_SIZE + x] = -20;
+      chunk.waterFlags[20 * CHUNK_SIZE + x] = WATER_OCEAN;
+    }
+
+    // Depress a river-like channel from x = 39 down to x = 25 at z = 20
+    for (let x = 25; x < 40; x++) {
+      chunk.heights[20 * CHUNK_SIZE + x] = -10;
+    }
+
+    // Even with global seed at (-1, -1) not stored at L2, ocean follows into the channel
+    flood.propagateFromSeeds(lod, [{ cx: -1, cz: -1, lx: 1, lz: 1 }]);
+    expect(chunk.waterFlags[20 * CHUNK_SIZE + 25]).toBe(WATER_OCEAN);
+    expect(chunk.waterFlags[20 * CHUNK_SIZE + 24]).toBe(0);
+  });
 });

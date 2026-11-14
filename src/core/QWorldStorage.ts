@@ -1,5 +1,5 @@
-import { QWorldChunkTree } from './QWorldChunkTree';
-import { QWorldVectorTree, WorldMarker, WorldPolyline } from './QWorldVectorTree';
+import { QWorldChunkTree, WORLD_SPAN_X, WORLD_SPAN_Z } from './QWorldChunkTree';
+import { QWorldVectorTree, WorldMarker, WorldPolyline, WorldRoute } from './QWorldVectorTree';
 
 interface SerializedChunk {
   lod: number;
@@ -8,14 +8,17 @@ interface SerializedChunk {
   h: number[];
   b: number[];
   w: number[];
+  r?: number[];
 }
 
 interface SerializedWorld {
   version: 1;
   name: string;
+  seaLevel?: number;
   chunks: SerializedChunk[];
   markers: WorldMarker[];
   polylines: WorldPolyline[];
+  routes?: WorldRoute[];
 }
 
 function encodeRle(arr: Int16Array | Uint8Array): number[] {
@@ -52,7 +55,8 @@ export class QWorldStorage {
   public static serializeToJson(
     chunkTree: QWorldChunkTree,
     vectorTree: QWorldVectorTree,
-    name: string = 'Untitled World'
+    name: string = 'Untitled World',
+    seaLevel?: number
   ): string {
     const chunks: SerializedChunk[] = chunkTree.getAllChunks().map((c) => ({
       lod: c.lod,
@@ -61,14 +65,17 @@ export class QWorldStorage {
       h: encodeRle(c.heights),
       b: encodeRle(c.biomes),
       w: encodeRle(c.waterFlags),
+      r: encodeRle(c.rainfall),
     }));
 
     const payload: SerializedWorld = {
       version: 1,
       name,
+      seaLevel,
       chunks,
       markers: vectorTree.getAllMarkers(),
       polylines: vectorTree.getAllPolylines(),
+      routes: vectorTree.getAllRoutes(),
     };
 
     return JSON.stringify(payload);
@@ -76,18 +83,25 @@ export class QWorldStorage {
 
   public static deserializeFromJson(json: string): {
     name: string;
+    seaLevel?: number;
     chunkTree: QWorldChunkTree;
     vectorTree: QWorldVectorTree;
   } {
     const parsed = JSON.parse(json) as SerializedWorld;
     const chunkTree = new QWorldChunkTree();
-    const vectorTree = new QWorldVectorTree({ minX: -100_000, maxX: 100_000, minZ: -100_000, maxZ: 100_000 });
+    const vectorTree = new QWorldVectorTree({
+      minX: -100_000,
+      maxX: Math.max(100_000, WORLD_SPAN_X),
+      minZ: -100_000,
+      maxZ: Math.max(100_000, WORLD_SPAN_Z),
+    });
 
     for (const sc of parsed.chunks) {
       const chunk = chunkTree.getOrCreateChunk(sc.lod, sc.cx, sc.cz);
       decodeRle(sc.h, chunk.heights);
       decodeRle(sc.b, chunk.biomes);
       decodeRle(sc.w, chunk.waterFlags);
+      if (sc.r) decodeRle(sc.r, chunk.rainfall);
     }
 
     for (const m of parsed.markers) {
@@ -96,7 +110,12 @@ export class QWorldStorage {
     for (const p of parsed.polylines) {
       vectorTree.addPolyline(p);
     }
+    if (parsed.routes) {
+      for (const r of parsed.routes) {
+        vectorTree.addRoute(r);
+      }
+    }
 
-    return { name: parsed.name, chunkTree, vectorTree };
+    return { name: parsed.name, seaLevel: parsed.seaLevel, chunkTree, vectorTree };
   }
 }
